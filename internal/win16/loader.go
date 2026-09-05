@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/wicanr2/wine-gorgon/internal/ne"
+	"github.com/wicanr2/wine-gorgon/internal/winapi"
 )
 
 // ThunkSel 是放 API thunk 的 selector。
@@ -123,6 +124,12 @@ func (mod *Module) relocValue(r ne.Reloc) (off uint16, seg uint16, err error) {
 		imp, err := mod.Image.ImportForReloc(r)
 		if err != nil {
 			return 0, 0, err
+		}
+		// 有些匯入不是函式而是常數（`__AHSHIFT` 被填進 `mov cx, ????`
+		// 的立即數，後面接 `shl bx, cl`）。把常數當成函式位址填進去，
+		// huge 指標的位移運算會整個歪掉，而且不會當掉。
+		if v, ok := winapi.ValueImports[imp.Key()]; ok {
+			return v, v, nil
 		}
 		t, ok := mod.ThunkFor(imp.Key())
 		if !ok {

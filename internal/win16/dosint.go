@@ -92,6 +92,20 @@ func (p *Process) onInt(c *cpu.CPU, n uint8) (bool, error) {
 			c.SetR16(cpu.AX, 0x0100)
 			c.SetFlag(cpu.FlagCF, false)
 			return true, nil
+		case 0x2A: // 取日期
+			d := p.BaseTime.Add(time.Duration(p.Clock.Millis()) * time.Millisecond)
+			c.SetR16(cpu.CX, uint16(d.Year()))
+			c.SetReg8(6, uint8(d.Month())) // DH
+			c.SetReg8(2, uint8(d.Day()))   // DL
+			c.SetReg8(0, uint8(d.Weekday()))
+			return true, nil
+		case 0x2C: // 取時間
+			d := p.BaseTime.Add(time.Duration(p.Clock.Millis()) * time.Millisecond)
+			c.SetReg8(5, uint8(d.Hour()))   // CH
+			c.SetReg8(1, uint8(d.Minute())) // CL
+			c.SetReg8(6, uint8(d.Second())) // DH
+			c.SetReg8(2, uint8(d.Nanosecond()/10_000_000))
+			return true, nil
 		case 0x30: // 取 DOS 版本
 			c.SetR16(cpu.AX, 0x1606) // 6.22：AL=6 主版本、AH=22 次版本
 			c.SetR16(cpu.BX, 0)

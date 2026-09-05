@@ -68,21 +68,16 @@ func RegisterKernel(p *Process) {
 
 	// GlobalAlloc(UINT flags, DWORD bytes)
 	h["KERNEL.#15"] = func(p *Process, a Args) (uint32, error) {
-		flags, size := a.Word(0), a.Long(2)
+		size := a.Long(2)
 		if size == 0 {
 			size = 1
 		}
+		// GMEM_ZEROINIT 沒設時內容是「未定義」。這裡一律給零：
+		// 「未定義」在對拍工具上必須可重現，不能真的是垃圾。
 		if size > 0x10000 {
-			// 大於 64 KiB 要多個 selector，這一層還沒做；先明白地報出來。
-			return 0, errUnsupported("GlobalAlloc 要求 %d bytes，超過單一 selector 的 64 KiB", size)
+			return uint32(p.Mod.Mem.AllocHuge("GlobalAlloc", int(size)).Sel), nil
 		}
-		b := p.Mod.Mem.Alloc("GlobalAlloc", int(size))
-		if flags&gmemZeroInit == 0 {
-			// GMEM_ZEROINIT 沒設時內容是未定義的。這裡照樣給零：
-			// 「未定義」在對拍工具上要可重現，不能真的是垃圾。
-			_ = b
-		}
-		return uint32(b.Sel), nil
+		return uint32(p.Mod.Mem.Alloc("GlobalAlloc", int(size)).Sel), nil
 	}
 
 	// GlobalReAlloc(HGLOBAL, DWORD bytes, UINT flags)
@@ -98,7 +93,7 @@ func RegisterKernel(p *Process) {
 	}
 
 	h["KERNEL.#17"] = func(p *Process, a Args) (uint32, error) { // GlobalFree
-		if p.Mod.Mem.Free(a.Word(0)) {
+		if p.Mod.Mem.FreeHuge(a.Word(0)) {
 			return 0, nil
 		}
 		return uint32(a.Word(0)), nil // 失敗時回傳原 handle，這是 Win16 的約定
@@ -119,7 +114,15 @@ func RegisterKernel(p *Process) {
 		if !ok {
 			return 0, nil
 		}
-		return uint32(len(b.Data)), nil
+		n := uint32(0)
+		for b != nil {
+			n += uint32(len(b.Data))
+			if b.HugeNext == 0 {
+				break
+			}
+			b, _ = p.Mod.Mem.Block(b.HugeNext)
+		}
+		return n, nil
 	}
 
 	h["KERNEL.#21"] = func(p *Process, a Args) (uint32, error) { // GlobalHandle
@@ -132,6 +135,14 @@ func RegisterKernel(p *Process) {
 	// 模擬機器」的一個具體例子。
 	h["KERNEL.#51"] = func(p *Process, a Args) (uint32, error) { return a.Long(0), nil }
 	h["KERNEL.#52"] = func(p *Process, _ Args) (uint32, error) { return 0, nil }
+
+	// LoadLibrary(LPCSTR)：回大於 32 的值算成功。這一層不會真的載入
+	// 另一個模組——記下名字就好，需要它的功能再回頭處理。
+	h["KERNEL.#95"] = func(p *Process, a Args) (uint32, error) {
+		sel, off := a.Ptr(0)
+		p.Libraries = append(p.Libraries, p.CString(sel, off))
+		return 0x0100, nil
+	}
 
 	h["KERNEL.#90"] = func(p *Process, a Args) (uint32, error) { // lstrlen
 		sel, off := a.Ptr(0)
@@ -169,16 +180,22 @@ func RegisterKernel(p *Process) {
 	h["KERNEL.#348"] = func(p *Process, a Args) (uint32, error) {
 		dSel, dOff := a.Ptr(0)
 		sSel, sOff := a.Ptr(4)
-		n := a.Long(8)
-		for i := uint32(0); i < n; i++ {
-			b, err := p.Mod.Mem.ReadU8(sSel, sOff+uint16(i))
-			if err != nil {
-				return 0, err
-			}
-			if err := p.Mod.Mem.WriteU8(dSel, dOff+uint16(i), b); err != nil {
-				return 0, err
-			}
+		n := int(a.Long(8))
+		// 兩邊都可能是 huge 配置，所以兩邊都要跟著 selector 鏈走。
+		var buf []byte
+		p.Mod.Mem.Walk(sSel, sOff, n, func(part []byte) bool {
+			buf = append(buf, part...)
+			return true
+		})
+		if len(buf) < n {
+			p.note("hmemcpy 只讀到 %d／%d bytes（來源 %04X:%04X 到頭了）", len(buf), n, sSel, sOff)
 		}
+		wrote := 0
+		p.Mod.Mem.Walk(dSel, dOff, len(buf), func(part []byte) bool {
+			copy(part, buf[wrote:])
+			wrote += len(part)
+			return true
+		})
 		return 0, nil
 	}
 }

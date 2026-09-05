@@ -109,6 +109,7 @@ type Image struct {
 	ModuleNames []string // 1-based 使用；這裡是 0-based 陣列
 	Segments    []Segment
 	Imports     []Import
+	Resources   []Resource
 
 	raw          []byte
 	impNameTable uint32
@@ -183,7 +184,10 @@ func Parse(raw []byte) (*Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = resTableOff // 資源表另一支處理（docs/spec/002 §4）
+	resNameOff := ne + uint32(get(0x26))
+	if err := img.parseResources(resTableOff, resNameOff); err != nil {
+		return nil, err
+	}
 
 	// 模組參考表：每筆是一個進 imported-name table 的位移。
 	img.ModuleNames = make([]string, 0, modRefCount)

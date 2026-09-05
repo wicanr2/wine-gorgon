@@ -306,3 +306,9 @@ func (c *CPU) dataSeg(def int) uint16 {
 	}
 	return c.Seg[def]
 }
+
+// PushWord 推一個 16 位元值。給外部（win16 的回呼機制）鋪參數用。
+func (c *CPU) PushWord(v uint16) error { return c.push16(v) }
+
+// PopWord 彈一個 16 位元值。
+func (c *CPU) PopWord() (uint16, error) { return c.pop16() }

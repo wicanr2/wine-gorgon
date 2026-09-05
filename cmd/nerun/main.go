@@ -21,19 +21,21 @@ func main() {
 	steps := flag.Uint64("steps", 200000, "最多執行幾條指令")
 	trace := flag.Int("trace", 20, "結束時列出最後幾筆 API 呼叫")
 	stub := flag.Bool("stub", false, "把每一支 API 都當成「回 0 就好」，用來看呼叫序列走多遠")
+	data := flag.String("data", "", "原版資料目錄（唯讀掛成 C:\\CIV）")
+	write := flag.String("write", "", "可寫目錄；不給就一律不准寫")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "用法：nerun [選項] <NE 檔>")
 		os.Exit(2)
 	}
 
-	if err := run(flag.Arg(0), *steps, *trace, *stub); err != nil {
+	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, steps uint64, traceN int, stub bool) error {
+func run(path string, steps uint64, traceN int, stub bool, data, write string) error {
 	img, err := ne.Open(path)
 	if err != nil {
 		return err
@@ -47,9 +49,12 @@ func run(path string, steps uint64, traceN int, stub bool) error {
 		return err
 	}
 
-	win16.RegisterKernel(p)
-	win16.RegisterWin87EM(p)
-	win16.RegisterUser(p)
+	win16.RegisterAll(p)
+	if data != "" {
+		p.FS.Root = data
+	}
+	p.FS.WriteRoot = write
+	defer p.FS.CloseAll()
 
 	if stub {
 		// 「其餘全部回 0」不是模擬，是**量測**：看沒接的 API 先當成成功的話，
@@ -91,6 +96,21 @@ func run(path string, steps uint64, traceN int, stub bool) error {
 	for _, b := range p.MessageBoxes {
 		fmt.Printf("訊息框（第 %d 步）[%s] %s\n", b.Steps, b.Caption, b.Text)
 	}
+	if len(p.FS.Opened) > 0 {
+		fmt.Printf("開檔 %d 次：\n", len(p.FS.Opened))
+		for _, r := range p.FS.Opened {
+			status := "OK"
+			if !r.OK {
+				status = "找不到"
+			}
+			fmt.Printf("  %-24s %s\n", r.DOSPath, status)
+		}
+	}
+	if len(p.Libraries) > 0 {
+		fmt.Printf("LoadLibrary：%v\n", p.Libraries)
+	}
+	fmt.Printf("視窗 %d 個、GDI 物件 %d 個、blit %d 次、TextOut %d 次\n",
+		len(p.Windows), p.Objects.Count(), p.Blits, len(p.TextOuts))
 	for _, n := range p.Notes {
 		fmt.Printf("備註：%s\n", n)
 	}

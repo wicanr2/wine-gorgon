@@ -204,3 +204,16 @@ func Describe(key string) string {
 	}
 	return key
 }
+
+// ValueImports 是「匯入的不是函式，是一個常數」。
+//
+// `KERNEL.__AHSHIFT` 是最典型的：它被重定位進 `mov cx, ????` 的立即數，
+// 後面接 `shl bx, cl`——那是 huge 指標換算「跨過幾個 selector」的算式。
+// 把它當成函式位址填進去，位移運算就會整個歪掉，而且不會當掉。
+//
+// 值取自 286 保護模式的 selector 配置：selector 每 8 遞增一格，
+// 所以 `__AHINCR` ＝ 8、`__AHSHIFT` ＝ 3。CIV.EXE 只用到後者（151 筆重定位）。
+var ValueImports = map[string]uint16{
+	"KERNEL.#113": 3, // __AHSHIFT
+	"KERNEL.#114": 8, // __AHINCR
+}

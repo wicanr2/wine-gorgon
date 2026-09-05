@@ -33,16 +33,14 @@ func RegisterUser(p *Process) {
 	h["USER.#13"] = func(p *Process, _ Args) (uint32, error) { return p.Clock.Millis(), nil } // GetTickCount
 	h["USER.#104"] = func(p *Process, _ Args) (uint32, error) { return 0, nil }               // MessageBeep
 
-	// GetSystemMetrics：只回和版面有關的那幾項；其餘回 0 並記下來，
-	// 免得「回 0 也看起來正常」把問題藏起來。
+	// GetSystemMetrics 查 p.Metrics。表上沒有的回 0 並記進 Notes——
+	// 「回 0 也看起來正常」是最難查的那種錯。
 	h["USER.#179"] = func(p *Process, a Args) (uint32, error) {
-		switch a.Word(0) {
-		case 0: // SM_CXSCREEN
-			return uint32(p.ScreenW), nil
-		case 1: // SM_CYSCREEN
-			return uint32(p.ScreenH), nil
+		i := int(int16(a.Word(0)))
+		if v, ok := p.Metrics[i]; ok {
+			return uint32(v), nil
 		}
-		p.note("GetSystemMetrics(%d) 回 0（未實作的項目）", a.Word(0))
+		p.note("GetSystemMetrics(%d) 回 0（表上沒有這一項）", i)
 		return 0, nil
 	}
 }

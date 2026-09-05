@@ -2,6 +2,7 @@ package win16
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/wicanr2/wine-gorgon/internal/cpu"
 	"github.com/wicanr2/wine-gorgon/internal/ne"
@@ -55,9 +56,72 @@ type Process struct {
 	// 原版 Civilization 跑在 640×480；改這個會改變版面計算。
 	ScreenW, ScreenH int
 
+	// Screen 是整個桌面的畫布。視窗 DC 就是「Screen ＋ 一個原點與裁切」。
+	Screen *Surface
+
+	// SysPalette 是實體調色盤（256 格）。逐點比對比的是索引，
+	// 這張表只在輸出 PNG 時用到。
+	SysPalette [256]RGB
+
+	// Metrics 是 GetSystemMetrics 的表。預設值見 defaultMetrics，
+	// **是假說**，M4 之前要逐項核對。
+	Metrics map[int]int
+
+	// GDI／USER 的物件表與視窗表。
+	Objects     *Objects
+	Classes     map[string]*Class
+	Windows     map[uint16]*Window
+	WindowOrder []uint16 // 建立順序；重畫依這個順序掃
+	nextHWnd    uint16
+
+	// Queue 是訊息佇列，Timers 是計時器。
+	Queue  []Msg
+	Timers []Timer
+
+	// 滑鼠與焦點狀態。
+	Capture, Focus   uint16
+	CursorX, CursorY int
+	nextTimerID      uint16
+	cursorHandle     uint16
+	iconHandle       uint16
+
+	// PalMap 是「邏輯調色盤索引 → 實體調色盤索引」的對應，
+	// 由 RealizePalette 建立。
+	PalMap []byte
+
+	// TextOuts／FontFiles／Blits 是量測欄位：畫不出來的字、載過的字型檔、
+	// blit 次數。它們是下一輪的工作清單。
+	TextOuts  []TextOutCall
+	FontFiles []string
+	Blits     int
+	stock     map[uint16]uint16
+
+	// Quit 是收到 PostQuitMessage 之後的狀態。
+	Quit     bool
+	QuitCode uint16
+
+	// CallStepLimit 是一次回呼最多能跑幾條指令。回呼不回來多半是我們
+	// 給錯了參數，讓它無聲地跑下去只會把問題推遠。
+	CallStepLimit uint64
+	callDepth     int
+
+	// FS 是這個行程看得到的檔案系統。預設是空的（找不到任何檔案），
+	// 由呼叫端指定原始資料目錄。
+	FS *FileSystem
+
+	// BaseTime 是「行程開始的那一刻」。日期時間一律從它加上 Clock 算出來，
+	// 這樣同一份輸入永遠得到同一份輸出。預設取原版 CIV.EXE 的檔案時間。
+	BaseTime time.Time
+
 	// Clock 是這個行程看到的時間。預設是 StepClock：跟著指令數走，
 	// 單調而且可重現。
 	Clock Clock
+
+	// resources 是 FindResource 發出去的 HRSRC 對應表（1-based）。
+	resources []ne.Resource
+
+	// Libraries 記下 LoadLibrary 過的名字。
+	Libraries []string
 
 	// FPMathCodes 記下每次 `WIN87EM.__FPMATH` 的 BX 值。這是「先量再寫」
 	// 的欄位：等看到實際用到哪些功能碼，再決定要實作哪些。
@@ -199,7 +263,18 @@ func NewProcess(mod *Module) (*Process, error) {
 	p.Env = envBlk.Sel
 
 	p.CurrentDrive, p.CurrentDir = 2, `CIV`
+	p.FS = NewFileSystem("", "CIV")
 	p.ScreenW, p.ScreenH = 640, 480
+	p.Screen = NewSurface(p.ScreenW, p.ScreenH)
+	p.Metrics = defaultMetrics(p.ScreenW, p.ScreenH)
+	p.initPalette()
+	p.Objects = NewObjects()
+	p.Classes = map[string]*Class{}
+	p.Windows = map[uint16]*Window{}
+	p.nextHWnd = 0x0800
+	p.nextTimerID = 0x8000
+	p.CallStepLimit = 50_000_000
+	p.BaseTime = time.Date(1993, 12, 14, 15, 19, 0, 0, time.UTC)
 	p.Clock = &StepClock{CPU: c}
 	c.OnFarCall = p.onFarCall
 	c.OnInt = p.onInt

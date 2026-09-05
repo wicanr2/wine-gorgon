@@ -21,6 +21,13 @@ type Block struct {
 	Data  []byte
 	Name  string // 給錯誤訊息用：`seg 12`、`thunk`、`GlobalAlloc#3`
 	Fixed bool   // 段是不是不可移動（目前只影響顯示）
+
+	// HugeNext 是同一塊 huge 配置的下一個 selector；0 表示這是最後一段。
+	// 超過 64 KiB 的配置在 Win16 是「連號 selector，每個對到 64 KiB」，
+	// 程式用 `__AHSHIFT` 自己算要跳到哪一號。
+	HugeNext uint16
+	// HugeFirst 是這塊所屬 huge 配置的第一個 selector；0 表示不是 huge。
+	HugeFirst uint16
 }
 
 // SelInvalidError 是碰到沒配過的 selector。
@@ -126,6 +133,94 @@ func (m *Memory) WriteU16(sel uint16, off uint16, v uint16) error {
 	b.Data[off] = uint8(v)
 	b.Data[off+1] = uint8(v >> 8)
 	return nil
+}
+
+// AllocHuge 配置超過 64 KiB 的一塊，回傳第一個 selector。
+//
+// 每 64 KiB 一個 selector、號碼連續（每次 +8，也就是 `__AHSHIFT` ＝ 3）。
+// 所有段共用同一個底層陣列，所以跨段寫入天然是連續的——這是 Go 的
+// slice 剛好對得上 Win16 huge 模型的地方。
+func (m *Memory) AllocHuge(name string, size int) *Block {
+	if size <= 0 {
+		size = 1
+	}
+	backing := make([]byte, size)
+	const chunk = 0x10000
+	n := (size + chunk - 1) / chunk
+
+	var first *Block
+	var prev *Block
+	for i := 0; i < n; i++ {
+		lo := i * chunk
+		hi := lo + chunk
+		if hi > size {
+			hi = size
+		}
+		b := m.Put(m.nextSel(), fmt.Sprintf("%s#%d", name, i), backing[lo:hi])
+		if first == nil {
+			first = b
+		}
+		b.HugeFirst = first.Sel
+		if prev != nil {
+			prev.HugeNext = b.Sel
+		}
+		prev = b
+	}
+	return first
+}
+
+// nextSel 發一個新的動態 selector。
+func (m *Memory) nextSel() uint16 {
+	s := m.next
+	m.next += 8
+	return s
+}
+
+// FreeHuge 釋放一整塊 huge 配置。
+func (m *Memory) FreeHuge(sel uint16) bool {
+	b, ok := m.blocks[sel]
+	if !ok {
+		return false
+	}
+	if b.HugeFirst == 0 {
+		return m.Free(sel)
+	}
+	cur := b.HugeFirst
+	for cur != 0 {
+		nxt := uint16(0)
+		if blk, ok := m.blocks[cur]; ok {
+			nxt = blk.HugeNext
+		}
+		delete(m.blocks, cur)
+		cur = nxt
+	}
+	return true
+}
+
+// Walk 從 (sel, off) 開始往後走 n 個 byte，跨 huge 段時自動換 selector。
+// fn 拿到的是每一段的切片；回 false 就停。
+func (m *Memory) Walk(sel, off uint16, n int, fn func(part []byte) bool) int {
+	done := 0
+	for n > 0 {
+		b, ok := m.blocks[sel]
+		if !ok || int(off) >= len(b.Data) {
+			return done
+		}
+		part := b.Data[off:]
+		if len(part) > n {
+			part = part[:n]
+		}
+		if !fn(part) {
+			return done + len(part)
+		}
+		done += len(part)
+		n -= len(part)
+		sel, off = b.HugeNext, 0
+		if sel == 0 {
+			return done
+		}
+	}
+	return done
 }
 
 // Free 拿掉一個 selector。已經釋放的 selector 再讀寫會回

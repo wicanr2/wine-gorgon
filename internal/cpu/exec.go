@@ -789,6 +789,49 @@ func (c *CPU) exec0F(ip uint16) error {
 		return c.wrap(ip, c.writeOp(m.rm, v, S8), "寫回")
 	}
 	switch op {
+	case 0xA4, 0xA5, 0xAC, 0xAD: // SHLD／SHRD
+		// 雙精度位移：把另一個暫存器的位元從另一端「推進來」。
+		// Borland 用它做 32 位元以上的移位。
+		sz := c.opSize
+		m, err := c.decodeModRM()
+		if err != nil {
+			return c.wrap(ip, err, "ModRM")
+		}
+		var count uint32
+		if op == 0xA4 || op == 0xAC {
+			v, err := c.fetch8()
+			if err != nil {
+				return c.wrap(ip, err, "移位量")
+			}
+			count = uint32(v)
+		} else {
+			count = uint32(c.Reg8(1)) // CL
+		}
+		count &= 0x1F
+		dst, err := c.readOp(m.rm, sz)
+		if err != nil {
+			return c.wrap(ip, err, "讀運算元")
+		}
+		src := c.reg(m.reg, sz)
+		bits := widthBits(sz)
+		if count == 0 {
+			return nil
+		}
+		if count > bits {
+			// 位移量超過位寬時結果未定義；停下來比裝作沒事好。
+			return c.errf(ip, "SHLD/SHRD 的位移量 %d 超過位寬 %d（結果未定義）", count, bits)
+		}
+		m0 := widthMask(sz)
+		var res uint32
+		if op == 0xA4 || op == 0xA5 { // 左移
+			res = (dst<<count | src>>(bits-count)) & m0
+			c.SetFlag(FlagCF, dst>>(bits-count)&1 != 0)
+		} else { // 右移
+			res = (dst>>count | src<<(bits-count)) & m0
+			c.SetFlag(FlagCF, dst>>(count-1)&1 != 0)
+		}
+		c.setSZP(res, sz)
+		return c.wrap(ip, c.writeOp(m.rm, res, sz), "寫回")
 	case 0xAF: // IMUL r, r/m
 		sz := c.opSize
 		m, err := c.decodeModRM()
