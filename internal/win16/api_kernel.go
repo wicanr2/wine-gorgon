@@ -74,10 +74,19 @@ func RegisterKernel(p *Process) {
 		}
 		// GMEM_ZEROINIT 沒設時內容是「未定義」。這裡一律給零：
 		// 「未定義」在對拍工具上必須可重現，不能真的是垃圾。
+		var b *Block
 		if size > 0x10000 {
-			return uint32(p.Mod.Mem.AllocHuge("GlobalAlloc", int(size)).Sel), nil
+			b = p.Mod.Mem.AllocHuge("GlobalAlloc", int(size))
+		} else {
+			b = p.Mod.Mem.Alloc("GlobalAlloc", int(size))
 		}
-		return uint32(p.Mod.Mem.Alloc("GlobalAlloc", int(size)).Sel), nil
+		if b == nil {
+			// selector 用完了。回 0 是 Win16 的「配不到記憶體」，
+			// 遊戲會自己處理；但這是我們的上限不是它的，所以記一筆。
+			p.note("GlobalAlloc(%d) 配不到 selector（動態 selector 用完）", size)
+			return 0, nil
+		}
+		return uint32(b.Sel), nil
 	}
 
 	// GlobalReAlloc(HGLOBAL, DWORD bytes, UINT flags)

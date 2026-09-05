@@ -400,6 +400,9 @@ func RegisterGDI(p *Process) {
 			return 0, nil
 		}
 		blk := p.Mod.Mem.Alloc("EnumFonts 暫存", 128)
+		if blk == nil {
+			return 0, errUnsupported("EnumFontFamilies 配不到暫存 selector")
+		}
 		defer p.Mod.Mem.Free(blk.Sel)
 		n := uint32(0)
 		for _, f := range p.Fonts {

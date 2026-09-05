@@ -291,6 +291,57 @@ func (p *Process) Validate(w *Window, rect *[4]int) {
 	}
 }
 
+// MsgLogEntry 是一則訊息的紀錄。
+type MsgLogEntry struct {
+	HWnd    uint16
+	Message uint16
+	WParam  uint16
+	LParam  uint32
+	Steps   uint64
+}
+
+// logMsg 把訊息記進環狀緩衝。**只留最後 N 則**——長跑會送出上百萬則，
+// 全留會把記憶體吃光，而卡住的原因一定在最後那幾則裡。
+func (p *Process) logMsg(hwnd, msg, wParam uint16, lParam uint32) {
+	if p.MsgLogSize == 0 {
+		return
+	}
+	e := MsgLogEntry{HWnd: hwnd, Message: msg, WParam: wParam, LParam: lParam, Steps: p.CPU.Steps}
+	if len(p.MsgLog) < p.MsgLogSize {
+		p.MsgLog = append(p.MsgLog, e)
+		return
+	}
+	copy(p.MsgLog, p.MsgLog[1:])
+	p.MsgLog[len(p.MsgLog)-1] = e
+}
+
+// MsgName 把訊息編號翻成名字（只涵蓋這一層會遇到的）。
+func MsgName(m uint16) string {
+	if n, ok := msgNames[m]; ok {
+		return n
+	}
+	return ""
+}
+
+var msgNames = map[uint16]string{
+	0x0001: "WM_CREATE", 0x0002: "WM_DESTROY", 0x0003: "WM_MOVE",
+	0x0005: "WM_SIZE", 0x0006: "WM_ACTIVATE", 0x0007: "WM_SETFOCUS",
+	0x0008: "WM_KILLFOCUS", 0x000A: "WM_ENABLE", 0x000C: "WM_SETTEXT",
+	0x000D: "WM_GETTEXT", 0x000F: "WM_PAINT", 0x0010: "WM_CLOSE",
+	0x0011: "WM_QUERYENDSESSION", 0x0012: "WM_QUIT", 0x0014: "WM_ERASEBKGND",
+	0x0018: "WM_SHOWWINDOW", 0x001C: "WM_ACTIVATEAPP", 0x001D: "WM_FONTCHANGE",
+	0x0020: "WM_SETCURSOR", 0x0021: "WM_MOUSEACTIVATE", 0x0024: "WM_GETMINMAXINFO",
+	0x0030: "WM_SETFONT", 0x0081: "WM_NCCREATE", 0x0082: "WM_NCDESTROY",
+	0x0083: "WM_NCCALCSIZE", 0x0084: "WM_NCHITTEST", 0x0085: "WM_NCPAINT",
+	0x0086: "WM_NCACTIVATE", 0x0100: "WM_KEYDOWN", 0x0101: "WM_KEYUP",
+	0x0102: "WM_CHAR", 0x0110: "WM_INITDIALOG", 0x0111: "WM_COMMAND",
+	0x0112: "WM_SYSCOMMAND", 0x0113: "WM_TIMER", 0x0114: "WM_HSCROLL",
+	0x0115: "WM_VSCROLL", 0x0200: "WM_MOUSEMOVE", 0x0201: "WM_LBUTTONDOWN",
+	0x0202: "WM_LBUTTONUP", 0x0203: "WM_LBUTTONDBLCLK", 0x0204: "WM_RBUTTONDOWN",
+	0x0205: "WM_RBUTTONUP", 0x030F: "WM_QUERYNEWPALETTE", 0x0311: "WM_PALETTECHANGED",
+	0x00F0: "BM_GETCHECK", 0x00F1: "BM_SETCHECK",
+}
+
 // MsgCount 統計每個訊息被送過幾次。畫面沒動的時候，這是最快看出
 // 「到底在跑什麼」的東西。
 func (p *Process) MsgCount() map[uint16]int { return p.msgCount }
@@ -301,6 +352,7 @@ func (p *Process) SendMessage(hwnd, msg, wParam uint16, lParam uint32) (uint32, 
 		p.msgCount = map[uint16]int{}
 	}
 	p.msgCount[msg]++
+	p.logMsg(hwnd, msg, wParam, lParam)
 	w, ok := p.Windows[hwnd]
 	if !ok {
 		return 0, nil
@@ -320,28 +372,66 @@ func (p *Process) PostMessage(hwnd, msg, wParam uint16, lParam uint32) {
 	})
 }
 
-// nextMessage 取下一則要處理的訊息。
+// MsgFilter 是 PeekMessage／GetMessage 的過濾條件。
+//
+// **這不是可以省略的細節。** CIV.EXE 有一個只 peek 鍵盤訊息
+// （`0x0100..0x0108`）的輪詢迴圈，和一個處理全部訊息的主迴圈。不看過濾
+// 條件的話，鍵盤迴圈會把計時器訊息一則一則吃掉並當成按鍵，而主迴圈
+// 永遠等不到它要的東西——症狀是「按了按鈕之後畫面再也不動」。
+type MsgFilter struct {
+	HWnd     uint16 // 0 表示不限視窗
+	Min, Max uint16 // 都是 0 表示不限訊息
+}
+
+func (f MsgFilter) match(m Msg) bool {
+	if f.HWnd != 0 && m.HWnd != f.HWnd {
+		return false
+	}
+	if f.Min == 0 && f.Max == 0 {
+		return true
+	}
+	return m.Message >= f.Min && m.Message <= f.Max
+}
+
+// nextMessage 取下一則符合過濾條件的訊息。
 //
 // 順序照 Windows 的規則：佇列 → 計時器 → 重畫。**重畫排最後**才對——
 // 不然一則 WM_PAINT 會一直插隊，輸入永遠輪不到。
-func (p *Process) nextMessage() (Msg, bool) {
-	if len(p.Queue) > 0 {
-		m := p.Queue[0]
-		p.Queue = p.Queue[1:]
+//
+// 不符合條件的訊息要**留在佇列裡**，不能順手丟掉：那是另一個迴圈在等的。
+func (p *Process) nextMessage(f MsgFilter, remove bool) (Msg, bool) {
+	for i, m := range p.Queue {
+		if !f.match(m) {
+			continue
+		}
+		if remove {
+			p.Queue = append(p.Queue[:i], p.Queue[i+1:]...)
+		}
 		return m, true
 	}
 	now := p.Clock.Millis()
 	for i := range p.Timers {
 		t := &p.Timers[i]
-		if now >= t.NextDue {
-			t.NextDue = now + t.Elapse
-			return Msg{HWnd: t.HWnd, Message: WMTimer, WParam: t.ID, Time: now}, true
+		if now < t.NextDue {
+			continue
 		}
+		m := Msg{HWnd: t.HWnd, Message: WMTimer, WParam: t.ID, Time: now}
+		if !f.match(m) {
+			continue
+		}
+		if remove {
+			t.NextDue = now + t.Elapse
+		}
+		return m, true
 	}
 	for _, h := range p.WindowOrder {
 		w := p.Windows[h]
-		if w != nil && w.Visible && w.NeedPaint {
-			return Msg{HWnd: h, Message: WMPaint, Time: now}, true
+		if w == nil || !w.Visible || !w.NeedPaint {
+			continue
+		}
+		m := Msg{HWnd: h, Message: WMPaint, Time: now}
+		if f.match(m) {
+			return m, true
 		}
 	}
 	return Msg{}, false

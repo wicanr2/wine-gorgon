@@ -137,6 +137,11 @@ type Process struct {
 	dialogSeq int
 	msgCount  map[uint16]int
 
+	// MsgLog 是最後 MsgLogSize 則訊息。卡住的時候，「在等哪一則」
+	// 只有逐則看得出來——計數看不出順序。
+	MsgLog     []MsgLogEntry
+	MsgLogSize int
+
 	// Fonts 是載入的點陣字面，順序就是檔案裡的順序——`EnumFonts` 的
 	// 列舉順序也是這個（civ1 `docs/re/319` 靠它認出 CIVTIMES18 是第 17 個）。
 	Fonts []*BitmapFont
@@ -268,6 +273,9 @@ func NewProcess(mod *Module) (*Process, error) {
 	// PSP：真 Windows 給每個任務一個 DOS 程式段前綴，命令列在 +0x80
 	// （長度位元組 ＋ 內文 ＋ CR）。這裡只需要「命令列是空的」。
 	psp := mod.Mem.Alloc("PSP", 0x100)
+	if psp == nil {
+		return nil, fmt.Errorf("win16: 配不到 PSP 的 selector")
+	}
 	psp.Data[0x80] = 0
 	psp.Data[0x81] = 0x0D
 	p.PSP = psp.Sel
@@ -283,6 +291,9 @@ func NewProcess(mod *Module) (*Process, error) {
 	env = append(env, []byte(p.ModulePath)...)
 	env = append(env, 0x00)
 	envBlk := mod.Mem.Alloc("DOS 環境", len(env)+16)
+	if envBlk == nil {
+		return nil, fmt.Errorf("win16: 配不到 DOS 環境的 selector")
+	}
 	copy(envBlk.Data, env)
 	p.Env = envBlk.Sel
 
@@ -297,6 +308,7 @@ func NewProcess(mod *Module) (*Process, error) {
 	p.Windows = map[uint16]*Window{}
 	p.nextHWnd = 0x0800
 	p.nextTimerID = 0x8000
+	p.MsgLogSize = 4000
 
 	// 桌面視窗：GetDesktopWindow 要回一個**真的視窗**。回 0 的話，
 	// 呼叫端拿它去 GetWindowRect 會拿不到值，而 RECT 是呼叫端的區域變數

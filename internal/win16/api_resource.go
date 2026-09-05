@@ -36,6 +36,9 @@ func RegisterResource(p *Process) {
 			return 0, err
 		}
 		blk := p.Mod.Mem.Alloc("資源 "+r.String(), len(data))
+		if blk == nil {
+			return 0, nil
+		}
 		copy(blk.Data, data)
 		return uint32(blk.Sel), nil
 	}

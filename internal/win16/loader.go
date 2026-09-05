@@ -74,6 +74,11 @@ func Load(img *ne.Image) (*Module, error) {
 		if size == 0 {
 			size = 1 // 空段也要有 selector，否則 mov es, ax 會炸
 		}
+		// Win16 的全域堆積以 **32 個 byte** 為配置粒度，descriptor 的
+		// 界限設的是**進位之後**的大小。CIV.EXE 的段 92 宣告 0x4610，
+		// 而程式會寫到 0x4612——在真 Windows 上那還在 0x4620 的界限內。
+		// 不進位的話會在幾億條指令之後炸在一個和肇因毫無關係的地方。
+		size = (size + 31) &^ 31
 		// 自動資料段（DGROUP）後面還要接區域堆疊與區域堆積——它們不在
 		// 檔案裡，但 SS:SP 一開始就指到那塊的尾巴。不加就會在第一次 push
 		// 越界。

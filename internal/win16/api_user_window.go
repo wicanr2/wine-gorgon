@@ -96,6 +96,9 @@ func RegisterUserWindow(p *Process) {
 		// CREATESTRUCT 要放在 16 位元看得到的記憶體裡；視窗程序常常
 		// 從 lParam 讀 lpCreateParams。
 		cs := p.Mod.Mem.Alloc("CREATESTRUCT", 32)
+		if cs == nil {
+			return 0, errUnsupported("CreateWindow 配不到 CREATESTRUCT 的 selector")
+		}
 		put := func(d uint16, v uint16) { _ = p.Mod.Mem.WriteU16(cs.Sel, d, v) }
 		put(0, uint16(params))
 		put(2, uint16(params>>16))
@@ -209,23 +212,43 @@ func RegisterUserWindow(p *Process) {
 	// flags bit0 ＝ PM_REMOVE。
 	h["USER.#109"] = func(p *Process, a Args) (uint32, error) {
 		msgSel, msgOff := a.Ptr(0)
+		f := MsgFilter{HWnd: a.Word(4), Min: a.Word(6), Max: a.Word(8)}
 		remove := a.Word(10)&1 != 0
-		if p.Quit {
+		if p.Quit && f.match(Msg{Message: WMQuit}) {
 			p.writeMsg(msgSel, msgOff, Msg{Message: WMQuit, WParam: p.QuitCode, Time: p.Clock.Millis()})
 			return 1, nil
 		}
-		m, ok := p.nextMessage()
+		m, ok := p.nextMessage(f, remove)
 		if !ok {
 			return 0, nil
 		}
-		if !remove {
-			// 沒有 PM_REMOVE 就把它放回去。佇列訊息才需要放回；
-			// 計時器與重畫本來就是「還在」的狀態，不必還原。
-			if m.Message != WMTimer && m.Message != WMPaint {
-				p.Queue = append([]Msg{m}, p.Queue...)
-			}
-		}
 		p.writeMsg(msgSel, msgOff, m)
+		return 1, nil
+	}
+
+	// IsDialogMessage(HWND hDlg, MSG far*)
+	//
+	// **它不是只回一個布林。** 訊息若屬於這個對話框或它的子視窗，
+	// 這支函式會自己派送然後回非零；呼叫端看到非零就不再自己派送。
+	// 回 0 了事的話，對話框上的每一次點擊都會消失在兩個訊息迴圈之間
+	// ——畫面完全正常，只是再也不動。
+	//
+	// CIV.EXE 的主迴圈就是這個形狀：先用 `PeekMessage(0x0100..0x0108)`
+	// 輪詢鍵盤，再用一次不過濾的 `PeekMessage` 取訊息交給 IsDialogMessage。
+	h["USER.#90"] = func(p *Process, a Args) (uint32, error) {
+		hDlg := a.Word(0)
+		sel, off := a.Ptr(2)
+		u16 := func(d uint16) uint16 { v, _ := p.Mod.Mem.ReadU16(sel, off+d); return v }
+		hwnd, msg, wp := u16(0), u16(2), u16(4)
+		lp := uint32(u16(8))<<16 | uint32(u16(6))
+		if hDlg == 0 || (hwnd != hDlg && !p.isDescendant(hDlg, hwnd)) {
+			return 0, nil
+		}
+		// 鍵盤導覽（Tab／Enter／Esc）還沒做；訊息照樣派送，
+		// 遊戲自己的對話框程序會處理它認得的鍵。
+		if _, err := p.SendMessage(hwnd, msg, wp, lp); err != nil {
+			return 0, err
+		}
 		return 1, nil
 	}
 
@@ -647,6 +670,21 @@ func (p *Process) dc(h uint16) (*DC, bool) {
 	return obj.DC, true
 }
 
+// isDescendant 回答 hwnd 是不是 root 的子孫。
+func (p *Process) isDescendant(root, hwnd uint16) bool {
+	for i := 0; i < 32 && hwnd != 0; i++ {
+		w, ok := p.Window(hwnd)
+		if !ok {
+			return false
+		}
+		if w.Parent == root {
+			return true
+		}
+		hwnd = w.Parent
+	}
+	return false
+}
+
 func (p *Process) findTimer(hwnd, id uint16) *Timer {
 	for i := range p.Timers {
 		if p.Timers[i].HWnd == hwnd && p.Timers[i].ID == id {
@@ -884,16 +922,60 @@ func RegisterUserDraw(p *Process) {
 	}
 }
 
-// RegisterAll 登記目前實作好的全部處理器。
+// registration 是一個模組的處理器登記函式。
+type registration struct {
+	name string
+	fn   func(*Process)
+}
+
+var registrations = []registration{
+	{"KERNEL", RegisterKernel},
+	{"WIN87EM", RegisterWin87EM},
+	{"USER 基本", RegisterUser},
+	{"USER 視窗", RegisterUserWindow},
+	{"USER 繪圖", RegisterUserDraw},
+	{"GDI", RegisterGDI},
+	{"檔案", RegisterFile},
+	{"資源", RegisterResource},
+	{"對話框", RegisterDialog},
+	{"其他", RegisterMisc},
+}
+
+// RegisterAll 登記目前實作好的全部處理器，並檢查有沒有同一個鍵被登記兩次。
+//
+// **同一個鍵登記兩次是程式錯誤，而且症狀極難查**：覆寫不會改變鍵的
+// 數量，所以看最後那張表看不出來，而行為會安靜地變成後登記的那一份。
+// 這個檢查是防呆，不是為了修某個已知的錯。
 func RegisterAll(p *Process) {
-	RegisterKernel(p)
-	RegisterWin87EM(p)
-	RegisterUser(p)
-	RegisterUserWindow(p)
-	RegisterUserDraw(p)
-	RegisterGDI(p)
-	RegisterFile(p)
-	RegisterResource(p)
-	RegisterDialog(p)
-	RegisterMisc(p)
+	for k, names := range DuplicateHandlerKeys() {
+		p.note("API 處理器 %s 被 %v 各登記一次，後面的會蓋掉前面的", k, names)
+	}
+	for _, r := range registrations {
+		r.fn(p)
+	}
+}
+
+// DuplicateHandlerKeys 回報被多個模組宣告的 API 鍵。
+//
+// 作法是讓每個模組登記到**各自獨立的表**上再比對——直接看最後那張表
+// 是看不出覆寫的，因為覆寫不會改變鍵的數量。
+func DuplicateHandlerKeys() map[string][]string {
+	count := map[string][]string{}
+	for _, r := range registrations {
+		one := &Process{Handlers: map[string]Handler{}, RawHandlers: map[string]RawHandler{}}
+		r.fn(one)
+		for k := range one.Handlers {
+			count[k] = append(count[k], r.name)
+		}
+		for k := range one.RawHandlers {
+			count[k] = append(count[k], r.name)
+		}
+	}
+	out := map[string][]string{}
+	for k, names := range count {
+		if len(names) > 1 {
+			out[k] = names
+		}
+	}
+	return out
 }

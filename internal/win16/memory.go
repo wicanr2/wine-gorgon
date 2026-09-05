@@ -43,7 +43,7 @@ func (e *SelInvalidError) Error() string {
 // NewMemory 建一份空的位址空間。動態 selector 從 0x8007 起發
 // （低三位是 LDT 的 TI＋RPL，純粹為了讓數字看起來像真的 selector）。
 func NewMemory() *Memory {
-	return &Memory{blocks: map[uint16]*Block{}, next: 0x8007}
+	return &Memory{blocks: map[uint16]*Block{}, next: dynSelFirst}
 }
 
 // SegSelector 是段號（1-based）對應的 selector。
@@ -67,10 +67,12 @@ func (m *Memory) Put(sel uint16, name string, data []byte) *Block {
 	return b
 }
 
-// Alloc 配一塊新的記憶體並發一個 selector。
+// Alloc 配一塊新的記憶體並發一個 selector；發不出來回 nil。
 func (m *Memory) Alloc(name string, size int) *Block {
-	sel := m.next
-	m.next += 8
+	sel, ok := m.nextSel()
+	if !ok {
+		return nil
+	}
 	return m.Put(sel, name, make([]byte, size))
 }
 
@@ -156,7 +158,11 @@ func (m *Memory) AllocHuge(name string, size int) *Block {
 		if hi > size {
 			hi = size
 		}
-		b := m.Put(m.nextSel(), fmt.Sprintf("%s#%d", name, i), backing[lo:hi])
+		sel, ok := m.nextSel()
+		if !ok {
+			return nil
+		}
+		b := m.Put(sel, fmt.Sprintf("%s#%d", name, i), backing[lo:hi])
 		if first == nil {
 			first = b
 		}
@@ -169,11 +175,35 @@ func (m *Memory) AllocHuge(name string, size int) *Block {
 	return first
 }
 
-// nextSel 發一個新的動態 selector。
-func (m *Memory) nextSel() uint16 {
-	s := m.next
-	m.next += 8
-	return s
+// 動態 selector 的範圍。低位三個 bit 固定是 7（LDT ＋ RPL），所以每一格
+// 相差 8——這也正是 `__AHSHIFT` ＝ 3 的意思。
+const (
+	dynSelFirst = 0x8007
+	dynSelLast  = 0xFFF7
+)
+
+// nextSel 發一個沒被用掉的動態 selector。
+//
+// **一定要跳過已經在用的，而且不能讓 uint16 自己繞回去。** 早期版本是
+// `m.next += 8`，配到第 8,192 個時 uint16 溢位變成 `0x0007`、`0x000F`……
+// 也就是段 0、段 1 的 selector，於是一塊 GlobalAlloc 把程式碼段整個蓋掉。
+// 症狀出現在幾千萬條指令之後，而且是「取指失敗」——離肇因非常遠。
+func (m *Memory) nextSel() (uint16, bool) {
+	start := m.next
+	for {
+		sel := m.next
+		if m.next >= dynSelLast {
+			m.next = dynSelFirst
+		} else {
+			m.next += 8
+		}
+		if _, used := m.blocks[sel]; !used {
+			return sel, true
+		}
+		if m.next == start {
+			return 0, false // 繞了一圈都沒有空位
+		}
+	}
 }
 
 // FreeHuge 釋放一整塊 huge 配置。

@@ -113,6 +113,43 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 				o.Steps, o.Window, o.ScreenX, o.ScreenY, o.Text))
 		}
 		return nil
+	case "msgs":
+		n := 40
+		if len(args) > 0 {
+			if v, err := strconv.Atoi(args[0]); err == nil {
+				n = v
+			}
+		}
+		// 第二個參數是「不要印的訊息編號」，用逗號分隔。訊息迴圈空轉時
+		// WM_TIMER 會把紀錄淹掉，而卡住的原因不在它。
+		skip := map[uint16]bool{}
+		if len(args) > 1 {
+			for _, f := range strings.Split(args[1], ",") {
+				if v, err := strconv.ParseUint(f, 0, 16); err == nil {
+					skip[uint16(v)] = true
+				}
+			}
+		}
+		var log []win16.MsgLogEntry
+		for _, e := range p.MsgLog {
+			if !skip[e.Message] {
+				log = append(log, e)
+			}
+		}
+		if len(log) > n {
+			log = log[len(log)-n:]
+		}
+		echo(fmt.Sprintf("  訊息紀錄共 %d 則（上限 %d），濾掉後 %d 則",
+			len(p.MsgLog), p.MsgLogSize, len(log)))
+		for _, e := range log {
+			name := win16.MsgName(e.Message)
+			if name == "" {
+				name = fmt.Sprintf("%04X", e.Message)
+			}
+			echo(fmt.Sprintf("  第 %d 步 %04X %-20s wParam=%04X lParam=%08X",
+				e.Steps, e.HWnd, name, e.WParam, e.LParam))
+		}
+		return nil
 	case "print":
 		for _, hw := range p.WindowOrder {
 			w, ok := p.Window(hw)

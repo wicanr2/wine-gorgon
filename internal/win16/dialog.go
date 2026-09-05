@@ -172,6 +172,9 @@ func RegisterDialog(p *Process) {
 			return 0, err
 		}
 		blk := p.Mod.Mem.Alloc("對話框範本 "+r.String(), len(data))
+		if blk == nil {
+			return 0, errUnsupported("CreateDialog 配不到範本的 selector")
+		}
 		copy(blk.Data, data)
 		defer p.Mod.Mem.Free(blk.Sel)
 		procSel, procOff := a.Ptr(8)
@@ -205,7 +208,6 @@ func RegisterDialog(p *Process) {
 		return p.SendMessage(hchild, a.Word(4), a.Word(6), a.Long(8))
 	}
 
-	h["USER.#90"] = func(p *Process, _ Args) (uint32, error) { return 0, nil } // IsDialogMessage
 }
 
 // createDialog 依範本建對話框與它的控制項。

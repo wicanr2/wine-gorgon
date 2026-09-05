@@ -121,3 +121,59 @@ func TestInvalidateUnions(t *testing.T) {
 		t.Error("整塊蓋掉之後應該不必再畫")
 	}
 }
+
+// 同一個 API 不能被兩個模組各登記一次：後面的會蓋掉前面的，而症狀是
+// 「畫面正常但再也不動」。IsDialogMessage 就這樣被蓋掉過。
+func TestNoDuplicateHandlerRegistrations(t *testing.T) {
+	if dup := DuplicateHandlerKeys(); len(dup) > 0 {
+		for k, names := range dup {
+			t.Errorf("%s 被 %v 各登記一次", k, names)
+		}
+	}
+}
+
+// selector 配置器不能繞回段的號段。早期版本用 `next += 8`，配到第
+// 8,192 個時 uint16 溢位變成 0x0007／0x000F，也就是段 0、段 1——
+// 一塊 GlobalAlloc 把程式碼段整個蓋掉，而症狀是幾千萬條指令之後的
+// 「取指失敗」，離肇因非常遠。
+func TestSelectorAllocatorNeverHitsSegmentSpace(t *testing.T) {
+	m := NewMemory()
+	m.Put(SegSelector(1), "seg 1", make([]byte, 16))
+	seen := map[uint16]bool{}
+	for i := 0; i < 5000; i++ {
+		b := m.Alloc("x", 1)
+		if b == nil {
+			t.Fatalf("第 %d 次就配不出來了", i)
+		}
+		if b.Sel < 0x8000 {
+			t.Fatalf("第 %d 次配到 %04X，落進段的號段", i, b.Sel)
+		}
+		if seen[b.Sel] {
+			t.Fatalf("第 %d 次重複配到 %04X", i, b.Sel)
+		}
+		seen[b.Sel] = true
+		m.Free(b.Sel) // 釋放之後要能重用，否則 4,000 多個就用完了
+		delete(seen, b.Sel)
+	}
+	if blk, ok := m.Block(SegSelector(1)); !ok || blk.Name != "seg 1" {
+		t.Error("段 1 被蓋掉了")
+	}
+}
+
+func TestSelectorAllocatorReportsExhaustion(t *testing.T) {
+	m := NewMemory()
+	n := 0
+	for {
+		b := m.Alloc("x", 1)
+		if b == nil {
+			break
+		}
+		n++
+		if n > 20000 {
+			t.Fatal("配不完——耗盡時應該回 nil")
+		}
+	}
+	if n < 1000 {
+		t.Errorf("只配得出 %d 個 selector，太少", n)
+	}
+}
