@@ -1,0 +1,10 @@
+# 小地圖白框追蹤分支的第二道閘：client 高 / scale == 50。
+# client 高靜態讀不出來（視窗記錄在執行時才有），所以直接問執行中的程式。
+waitfor Load a Saved Game
+clickwin Load a Saved Game
+run 5000000
+clickwin OK
+run 400000000
+wins
+peek 0417:00C8 2
+peek 041F:0000 2

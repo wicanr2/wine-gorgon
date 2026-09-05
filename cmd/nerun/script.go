@@ -185,6 +185,24 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 				o.Steps, o.Window, o.ScreenX, o.ScreenY, o.Text))
 		}
 		return nil
+	case "wins":
+		// 列出目前所有視窗的幾何。用來回答「某個子視窗的 client 有多大」
+		// 這種靜態讀不出來的問題（例如 civ1 小地圖白框追蹤分支的第二道
+		// 閘是 client 高/scale == 50）。
+		for _, h := range p.WindowOrder {
+			w, ok := p.Window(h)
+			if !ok {
+				continue
+			}
+			vis := " "
+			if w.Visible {
+				vis = "*"
+			}
+			echo(fmt.Sprintf("  %s %04X %-14s win=(%d,%d %dx%d) client=(%d,%d %dx%d) style=%08X %q",
+				vis, h, w.ClassName, w.AbsX, w.AbsY, w.W, w.H,
+				w.ClientX, w.ClientY, w.ClientW, w.ClientH, w.Style, w.Text))
+		}
+		return nil
 	case "msgs":
 		n := 40
 		if len(args) > 0 {
