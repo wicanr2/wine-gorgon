@@ -218,3 +218,65 @@ func TestMainWindowClientMatchesOracle(t *testing.T) {
 		t.Errorf("客戶區大小 %dx%d，預期 610x540", w.ClientW, w.ClientH)
 	}
 }
+
+// TestWindowDCFollowsMoveWindow 鎖住「視窗 DC 的幾何跟著視窗走」。
+//
+// CIV.EXE 先用一個小尺寸 CreateWindow（`WdwSmMap` 40×40、`CIV` 600×400），
+// 拿到 DC，**之後才 MoveWindow 到最終大小**，然後用同一個 DC 畫。把
+// GetDC 當下的幾何凍住的話：小地圖整片是黑的（畫的東西被裁到建立時的
+// 35×16 裡），主地圖的內容整個往左偏 168 px（原點停在建立時的客戶區）。
+// 兩個症狀都真的發生過，而且各自被當成兩個不同的謎。
+func TestWindowDCFollowsMoveWindow(t *testing.T) {
+	p := newTestProcess()
+	p.ScreenW, p.ScreenH = 800, 600
+	p.Screen = NewSurface(800, 600)
+	p.Metrics = defaultMetrics(800, 600)
+	w := &Window{
+		Handle: 0x0800,
+		Style:  WSCaption | WSThickFram | WSVScroll | WSHScroll,
+		X:      0, Y: 0, W: 600, H: 400,
+		HasMenu: true,
+	}
+	p.Windows[w.Handle] = w
+	p.layout(w)
+	h := p.newWindowDC(w, nil)
+
+	w.X, w.Y, w.W, w.H = 168, 0, 632, 600
+	p.layout(w)
+
+	d, ok := p.dc(h)
+	if !ok {
+		t.Fatal("取不到 DC")
+	}
+	if d.OrgX != w.ClientX || d.OrgY != w.ClientY {
+		t.Errorf("DC 原點 (%d,%d)，視窗客戶區是 (%d,%d)",
+			d.OrgX, d.OrgY, w.ClientX, w.ClientY)
+	}
+	if d.ClipL != w.ClientX || d.ClipT != w.ClientY ||
+		d.ClipR != w.ClientX+w.ClientW || d.ClipB != w.ClientY+w.ClientH {
+		t.Errorf("DC 裁剪 (%d,%d,%d,%d)，客戶區是 (%d,%d,%d,%d)",
+			d.ClipL, d.ClipT, d.ClipR, d.ClipB,
+			w.ClientX, w.ClientY, w.ClientX+w.ClientW, w.ClientY+w.ClientH)
+	}
+}
+
+// TestPaintDCClipStaysRelative 是上一支的另一半：BeginPaint 給的更新矩形
+// 是**相對客戶區**的，視窗移動之後要跟著移，不能留在絕對座標上。
+func TestPaintDCClipStaysRelative(t *testing.T) {
+	p := newTestProcess()
+	p.ScreenW, p.ScreenH = 800, 600
+	p.Metrics = defaultMetrics(800, 600)
+	w := &Window{Handle: 0x0800, X: 0, Y: 0, W: 200, H: 200}
+	p.Windows[w.Handle] = w
+	p.layout(w)
+	clip := [4]int{10, 10, 50, 50}
+	h := p.newWindowDC(w, &clip)
+
+	w.X, w.Y = 100, 80
+	p.layout(w)
+	d, _ := p.dc(h)
+	if d.ClipL != w.ClientX+10 || d.ClipT != w.ClientY+10 {
+		t.Errorf("更新矩形左上 (%d,%d)，預期 (%d,%d)",
+			d.ClipL, d.ClipT, w.ClientX+10, w.ClientY+10)
+	}
+}

@@ -729,33 +729,55 @@ func (p *Process) defWindowProc(hwnd, msg, wParam uint16, lParam uint32) (uint32
 func (p *Process) newWindowDC(w *Window, clip *[4]int) uint16 {
 	d := &DC{
 		Surf: p.Screen, Window: w.Handle,
-		OrgX: w.ClientX, OrgY: w.ClientY,
-		ClipL: w.ClientX, ClipT: w.ClientY,
-		ClipR: w.ClientX + w.ClientW, ClipB: w.ClientY + w.ClientH,
-		BkMode: 2, // OPAQUE
+		BkMode:  2, // OPAQUE
+		ClipRel: clip,
 	}
 	// 新的 DC 預設選著系統字型（SYSTEM_FONT ＝ 13）。不給預設字型的話，
 	// 呼叫端不 SelectObject 就直接 TextOut 時什麼都不會出現。
 	d.Font = p.stockObject(13)
-	if clip != nil {
-		d.ClipL = max(d.ClipL, w.ClientX+clip[0])
-		d.ClipT = max(d.ClipT, w.ClientY+clip[1])
-		d.ClipR = min(d.ClipR, w.ClientX+clip[2])
-		d.ClipB = min(d.ClipB, w.ClientY+clip[3])
-	}
-	d.ClipR = min(d.ClipR, p.Screen.W)
-	d.ClipB = min(d.ClipB, p.Screen.H)
+	p.refreshWindowDC(d)
 	h := p.Objects.Add(&Object{Kind: ObjDC, DC: d})
 	d.Handle = h
 	return h
 }
 
-// dc 取一個 DC。
+// refreshWindowDC 讓視窗 DC 的原點與裁剪跟著視窗**現在**的位置與大小走。
+//
+// 為什麼不能在 GetDC 當下算好就凍住：CIV.EXE 先用一個小尺寸
+// `CreateWindow`（`WdwSmMap` 是 40×40、`CIV` 是 600×400），拿到 DC，
+// **之後才 MoveWindow 到最終大小**，然後用同一個 DC 畫。凍住的話畫出來
+// 的東西會落在建立時的位置，還被裁成建立時的大小——小地圖整片是黑的，
+// 主地圖的內容整個往左偏。Windows 的視窗 DC 本來就是跟著視窗的可見區域
+// 走的，這裡只是把那件事做出來。
+func (p *Process) refreshWindowDC(d *DC) {
+	if d == nil || d.Window == 0 {
+		return
+	}
+	w, ok := p.Window(d.Window)
+	if !ok {
+		return
+	}
+	d.OrgX, d.OrgY = w.ClientX, w.ClientY
+	d.ClipL, d.ClipT = w.ClientX, w.ClientY
+	d.ClipR, d.ClipB = w.ClientX+w.ClientW, w.ClientY+w.ClientH
+	if c := d.ClipRel; c != nil {
+		d.ClipL = max(d.ClipL, w.ClientX+c[0])
+		d.ClipT = max(d.ClipT, w.ClientY+c[1])
+		d.ClipR = min(d.ClipR, w.ClientX+c[2])
+		d.ClipB = min(d.ClipB, w.ClientY+c[3])
+	}
+	d.ClipR = min(d.ClipR, p.Screen.W)
+	d.ClipB = min(d.ClipB, p.Screen.H)
+}
+
+// dc 取一個 DC。視窗 DC 每次取出來都會重算幾何——**不能凍在 GetDC 當下**，
+// 理由見 refreshWindowDC。
 func (p *Process) dc(h uint16) (*DC, bool) {
 	obj, ok := p.Objects.Get(h, ObjDC)
 	if !ok {
 		return nil, false
 	}
+	p.refreshWindowDC(obj.DC)
 	return obj.DC, true
 }
 

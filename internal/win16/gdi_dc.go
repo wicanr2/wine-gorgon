@@ -16,11 +16,14 @@ type DC struct {
 	ClipL, ClipT, ClipR, ClipB int
 
 	Window uint16 // 屬於哪個視窗；0 表示記憶體 DC
-	Bitmap uint16 // 選進來的點陣圖
-	Brush  uint16
-	Pen    uint16
-	Font   uint16
-	Pal    uint16
+	// ClipRel 是**相對客戶區**的額外裁剪（BeginPaint 的更新矩形）。
+	// 存相對值而不是絕對值，視窗一移動就能重算——見 refreshWindowDC。
+	ClipRel *[4]int
+	Bitmap  uint16 // 選進來的點陣圖
+	Brush   uint16
+	Pen     uint16
+	Font    uint16
+	Pal     uint16
 
 	TextColor uint32
 	BkColor   uint32
