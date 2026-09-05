@@ -26,19 +26,20 @@ func main() {
 	write := flag.String("write", "", "可寫目錄；不給就一律不准寫")
 	shot := flag.String("shot", "", "結束時把整個畫面存成 PNG")
 	script := flag.String("script", "", "腳本檔：run／click／key／shot（見 cmd/nerun/script.go）")
+	around := flag.String("around", "", "印出第一次呼叫這支 API 前後的紀錄（例：GDI.BITBLT）")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "用法：nerun [選項] <NE 檔>")
 		os.Exit(2)
 	}
 
-	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *script); err != nil {
+	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *script, *around); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, steps uint64, traceN int, stub bool, data, write, shot, script string) error {
+func run(path string, steps uint64, traceN int, stub bool, data, write, shot, script, around string) error {
 	img, err := ne.Open(path)
 	if err != nil {
 		return err
@@ -88,15 +89,40 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 	} else {
 		runErr = p.Run(steps)
 	}
-	fmt.Printf("執行 %d 條指令，攔到 %d 次 API 呼叫\n", c.Steps, len(p.Trace))
+	fmt.Printf("執行 %d 條指令，攔到 %d 次 API 呼叫\n", c.Steps, p.Calls)
 
-	if n := len(p.Trace); n > 0 && traceN > 0 {
+	if around != "" {
+		for i, call := range p.Trace {
+			if winapi.Describe(call.Import.Key()) != around {
+				continue
+			}
+			lo := i - 15
+			if lo < 0 {
+				lo = 0
+			}
+			hi := i + 3
+			if hi > len(p.Trace) {
+				hi = len(p.Trace)
+			}
+			fmt.Printf("第一次 %s 前後：\n", around)
+			for _, c2 := range p.Trace[lo:hi] {
+				fmt.Printf("  #%-8d %-28s ← %04X:%04X\n", c2.Steps,
+					winapi.Describe(c2.Import.Key()), c2.FromCS, c2.FromIP)
+			}
+			break
+		}
+	}
+	recent := p.Trace
+	if len(p.Recent) > 0 {
+		recent = p.Recent
+	}
+	if n := len(recent); n > 0 && traceN > 0 {
 		from := n - traceN
 		if from < 0 {
 			from = 0
 		}
 		fmt.Printf("最後 %d 筆呼叫：\n", n-from)
-		for _, call := range p.Trace[from:] {
+		for _, call := range recent[from:] {
 			fmt.Printf("  #%-6d %-24s ← %04X:%04X\n", call.Steps, winapi.Describe(call.Import.Key()), call.FromCS, call.FromIP)
 		}
 	}
@@ -119,6 +145,9 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 	}
 	fmt.Printf("視窗 %d 個、GDI 物件 %d 個、blit %d 次、TextOut %d 次\n",
 		len(p.Windows), p.Objects.Count(), p.Blits, len(p.TextOuts))
+	if p.BlitsBadDC > 0 {
+		fmt.Printf("BitBlt 因為 DC 不存在而畫不出來：%d 次\n", p.BlitsBadDC)
+	}
 	for _, hw := range p.WindowOrder {
 		w, ok := p.Window(hw)
 		if !ok {
@@ -148,8 +177,8 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 	}
 	{
 		counts := map[string]int{}
-		for _, c := range p.Trace {
-			counts[winapi.Describe(c.Import.Key())]++
+		for k, n := range p.CallCount() {
+			counts[winapi.Describe(k)] = n
 		}
 		type kv struct {
 			k string
@@ -160,9 +189,9 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 			xs = append(xs, kv{k, n})
 		}
 		sort.Slice(xs, func(i, j int) bool { return xs[i].n > xs[j].n })
-		fmt.Println("呼叫次數前 20：")
+		fmt.Println("呼叫次數：")
 		for i, x := range xs {
-			if i >= 20 {
+			if i >= 60 {
 				break
 			}
 			fmt.Printf("  %-32s %d\n", x.k, x.n)

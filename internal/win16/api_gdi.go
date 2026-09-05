@@ -153,17 +153,22 @@ func RegisterGDI(p *Process) {
 	h["GDI.#34"] = func(p *Process, a Args) (uint32, error) {
 		dst, ok := p.dc(a.Word(0))
 		if !ok {
+			p.BlitsBadDC++
+			p.note("BitBlt 的目的 DC %04X 不存在，呼叫端 %04X:%04X（畫不出來，而且不會報錯）", a.Word(0), p.LastCall.FromCS, p.LastCall.FromIP)
 			return 0, nil
 		}
-		src, _ := p.dc(a.Word(12))
+		src, srcOK := p.dc(a.Word(10))
+		if !srcOK && a.Word(10) != 0 {
+			p.note("BitBlt 的來源 DC %04X 不存在", a.Word(10))
+		}
 		pattern := byte(0)
 		if obj, ok := p.Objects.Get(dst.Brush, ObjBrush); ok {
 			pattern = obj.Brush.Index
 		}
 		BitBlt(dst, int(int16(a.Word(2))), int(int16(a.Word(4))),
 			int(int16(a.Word(6))), int(int16(a.Word(8))),
-			src, int(int16(a.Word(14))), int(int16(a.Word(16))),
-			a.Long(18), pattern)
+			src, int(int16(a.Word(12))), int(int16(a.Word(14))),
+			a.Long(16), pattern)
 		p.Blits++
 		return 1, nil
 	}
@@ -322,10 +327,13 @@ func RegisterGDI(p *Process) {
 			v, _ := p.Mod.Mem.ReadU8(sel, off+uint16(i))
 			b = append(b, v)
 		}
-		p.TextOuts = append(p.TextOuts, TextOutCall{
-			DC: a.Word(0), X: int(int16(a.Word(2))), Y: int(int16(a.Word(4))),
-			Text: string(b), Steps: p.CPU.Steps,
-		})
+		x, y := int(int16(a.Word(2))), int(int16(a.Word(4)))
+		call := TextOutCall{DC: a.Word(0), X: x, Y: y, Text: string(b), Steps: p.CPU.Steps}
+		if d, ok := p.dc(a.Word(0)); ok {
+			call.ScreenX, call.ScreenY = x+d.OrgX, y+d.OrgY
+			call.Window = d.Window
+		}
+		p.TextOuts = append(p.TextOuts, call)
 		p.note("TextOut 只記錄不畫字（還沒接原版點陣字型）")
 		return 1, nil
 	}
@@ -360,10 +368,14 @@ func RegisterGDI(p *Process) {
 // TextOutCall 是一次 TextOut。畫不出來的字先記著——它們是「還缺什麼」
 // 的清單，也是之後接上字型時的回歸樣本。
 type TextOutCall struct {
-	DC    uint16
-	X, Y  int
-	Text  string
-	Steps uint64
+	DC     uint16
+	Window uint16
+	X, Y   int // DC 座標
+	// ScreenX／ScreenY 是螢幕座標。字還畫不出來的時候，這一串就是
+	// 唯一看得到畫面內容的東西——用它導航對話框。
+	ScreenX, ScreenY int
+	Text             string
+	Steps            uint64
 }
 
 func (p *Process) textExtent(hdc uint16, n int) (int, int) {

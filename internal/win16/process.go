@@ -24,8 +24,18 @@ type Process struct {
 	// 選功能）。它要自己彈堆疊，所以也自己負責 RetFar。
 	RawHandlers map[string]RawHandler
 
-	// Trace 記下每一次 API 呼叫，順序即發生順序。
+	// Trace 記下前 TraceLimit 次 API 呼叫，順序即發生順序。
 	Trace []Call
+
+	// Recent 是最後 64 次呼叫（Trace 滿了之後才開始收）。
+	Recent []Call
+
+	// LastCall 是最近一次 API 呼叫，處理器可以用它報「誰呼叫我的」。
+	LastCall Call
+
+	// Calls 是總次數，callCount 是逐支的次數；兩者都沒有上限。
+	Calls     int
+	callCount map[string]int
 
 	// TraceLimit 是 Trace 的上限，避免長跑把記憶體吃光；0 表示不限。
 	TraceLimit int
@@ -94,10 +104,11 @@ type Process struct {
 
 	// TextOuts／FontFiles／Blits 是量測欄位：畫不出來的字、載過的字型檔、
 	// blit 次數。它們是下一輪的工作清單。
-	TextOuts  []TextOutCall
-	FontFiles []string
-	Blits     int
-	stock     map[uint16]uint16
+	TextOuts   []TextOutCall
+	FontFiles  []string
+	Blits      int
+	BlitsBadDC int
+	stock      map[uint16]uint16
 
 	// Quit 是收到 PostQuitMessage 之後的狀態。
 	Quit     bool
@@ -319,8 +330,21 @@ func (p *Process) onFarCall(c *cpu.CPU, sel, off uint16) (bool, error) {
 	fromIP, _ := p.Mod.Mem.ReadU16(c.Seg[cpu.SS], c.R16(cpu.SP))
 	fromCS, _ := p.Mod.Mem.ReadU16(c.Seg[cpu.SS], c.R16(cpu.SP)+2)
 	call := Call{Import: imp, Steps: c.Steps, FromCS: fromCS, FromIP: fromIP}
+	// Trace 有上限（長跑會吃光記憶體），但**計數沒有**：
+	// 上限一到就只剩前面那段，用它下「遊戲不再呼叫某支 API」的結論會錯。
+	if p.callCount == nil {
+		p.callCount = map[string]int{}
+	}
+	p.callCount[imp.Key()]++
+	p.Calls++
+	p.LastCall = call
 	if p.TraceLimit == 0 || len(p.Trace) < p.TraceLimit {
 		p.Trace = append(p.Trace, call)
+	} else if len(p.Recent) < 64 {
+		p.Recent = append(p.Recent, call)
+	} else {
+		copy(p.Recent, p.Recent[1:])
+		p.Recent[len(p.Recent)-1] = call
 	}
 
 	key := imp.Key()
@@ -343,6 +367,9 @@ func (p *Process) onFarCall(c *cpu.CPU, sel, off uint16) (bool, error) {
 	c.SetR16(cpu.DX, uint16(ret>>16))
 	return true, c.RetFar(uint16(fn.ArgBytes))
 }
+
+// CallCount 回傳每一支 API 被呼叫的總次數（沒有上限）。
+func (p *Process) CallCount() map[string]int { return p.callCount }
 
 // Run 跑到 Halt、錯誤或步數上限。
 func (p *Process) Run(maxSteps uint64) error { return p.CPU.Run(maxSteps) }

@@ -96,6 +96,23 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 			return err
 		}
 		return p.SavePNG(args[0], p.Screen.SubSurface(x, y, w, h))
+	case "text":
+		// 字還畫不出來，所以「畫面上有什麼字」只能從 TextOut 的紀錄看。
+		n := 40
+		if len(args) > 0 {
+			if v, err := strconv.Atoi(args[0]); err == nil {
+				n = v
+			}
+		}
+		outs := p.TextOuts
+		if len(outs) > n {
+			outs = outs[len(outs)-n:]
+		}
+		for _, o := range outs {
+			echo(fmt.Sprintf("  第 %d 步 視窗 %04X 螢幕 (%d,%d) %q",
+				o.Steps, o.Window, o.ScreenX, o.ScreenY, o.Text))
+		}
+		return nil
 	case "print":
 		for _, hw := range p.WindowOrder {
 			w, ok := p.Window(hw)

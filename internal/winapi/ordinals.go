@@ -145,7 +145,7 @@ var Table = map[string]Func{
 	"GDI.#20":  {"GDI", 20, "MOVETO", 6},
 	"GDI.#31":  {"GDI", 31, "SETPIXEL", 10},
 	"GDI.#33":  {"GDI", 33, "TEXTOUT", 12},
-	"GDI.#34":  {"GDI", 34, "BITBLT", 22},
+	"GDI.#34":  {"GDI", 34, "BITBLT", 20},
 	"GDI.#36":  {"GDI", 36, "POLYGON", 8},
 	"GDI.#37":  {"GDI", 37, "POLYLINE", 8},
 	"GDI.#45":  {"GDI", 45, "SELECTOBJECT", 4},

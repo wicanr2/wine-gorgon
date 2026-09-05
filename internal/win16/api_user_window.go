@@ -66,16 +66,24 @@ func RegisterUserWindow(p *Process) {
 
 		w := &Window{
 			Class: cls, Text: p.CString(nameSel, nameOff), Style: style,
-			Parent: parent, Menu: menu, Instance: inst,
+			Parent: parent, Instance: inst,
 			ProcSel: cls.ProcSel, ProcOff: cls.ProcOff,
 			Extra: make([]byte, cls.WndExtra),
 			X:     x, Y: y, W: cw, H: ch,
-			Enabled: true,
+			Enabled: true, ClassName: cls.Name,
+		}
+		// hMenu 這個參數對子視窗是**控制項編號**，對頂層視窗才是選單。
+		// 混在一起的話 GetDlgCtrlID 一律回 0，而 WM_COMMAND 的
+		// wParam 也就分不出是哪一個控制項。
+		if style&WSChild != 0 {
+			w.CtrlID = menu
+		} else {
+			w.Menu = menu
 		}
 		// 類別帶了選單名稱而且呼叫端沒給 hMenu 時，Windows 會自己載入
 		// 那個選單——選單列會吃掉客戶區 SM_CYMENU 的高度，直接影響
 		// 地圖從第幾列開始畫。
-		w.HasMenu = menu != 0 || (cls.MenuName != "" && style&WSChild == 0)
+		w.HasMenu = style&WSChild == 0 && (menu != 0 || cls.MenuName != "")
 		w.Handle = p.nextHWnd
 		p.nextHWnd++
 		p.Windows[w.Handle] = w
@@ -270,9 +278,16 @@ func RegisterUserWindow(p *Process) {
 
 	// --- DC ---
 
-	h["USER.#66"] = func(p *Process, a Args) (uint32, error) { // GetDC
-		w, ok := p.Window(a.Word(0))
+	// GetDC：`GetDC(NULL)` 是**整個螢幕**的 DC，不是錯誤。回 0 的話遊戲
+	// 會把 0 存進自己的 port 結構，之後每一次 BitBlt 都靜靜地畫不出來。
+	h["USER.#66"] = func(p *Process, a Args) (uint32, error) {
+		hwnd := a.Word(0)
+		if hwnd == 0 {
+			hwnd = p.Desktop
+		}
+		w, ok := p.Window(hwnd)
 		if !ok {
+			p.note("GetDC 的視窗 %04X 不存在", a.Word(0))
 			return 0, nil
 		}
 		return uint32(p.newWindowDC(w, nil)), nil
