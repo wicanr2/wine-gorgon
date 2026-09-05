@@ -80,6 +80,9 @@ func RegisterUserWindow(p *Process) {
 		p.nextHWnd++
 		p.Windows[w.Handle] = w
 		p.WindowOrder = append(p.WindowOrder, w.Handle)
+		if pw, ok := p.Window(parent); ok && style&WSChild != 0 {
+			pw.Children = append(pw.Children, w.Handle)
+		}
 		p.layout(w)
 
 		// CREATESTRUCT 要放在 16 位元看得到的記憶體裡；視窗程序常常
@@ -166,8 +169,23 @@ func RegisterUserWindow(p *Process) {
 	h["USER.#107"] = func(p *Process, a Args) (uint32, error) { // DefWindowProc
 		return p.defWindowProc(a.Word(0), a.Word(2), a.Word(4), a.Long(6))
 	}
-	h["USER.#308"] = func(p *Process, a Args) (uint32, error) { // DefDlgProc
-		return p.defWindowProc(a.Word(0), a.Word(2), a.Word(4), a.Long(6))
+	// DefDlgProc：先問 DLGPROC，它回 0 才做預設處理。這是對話框和一般
+	// 視窗唯一的行為差別，也是「類別程序 → DefDlgProc → DLGPROC」這條
+	// 鏈能接起來的關鍵。
+	h["USER.#308"] = func(p *Process, a Args) (uint32, error) {
+		hwnd, msg, wp, lp := a.Word(0), a.Word(2), a.Word(4), a.Long(6)
+		if w, ok := p.Window(hwnd); ok && (w.DlgProcSel != 0 || w.DlgProcOff != 0) && !w.inDlgProc {
+			w.inDlgProc = true
+			r, err := p.Call16(w.DlgProcSel, w.DlgProcOff, hwnd, msg, wp, uint16(lp>>16), uint16(lp))
+			w.inDlgProc = false
+			if err != nil {
+				return 0, err
+			}
+			if r != 0 {
+				return r, nil
+			}
+		}
+		return p.defWindowProc(hwnd, msg, wp, lp)
 	}
 
 	h["USER.#111"] = func(p *Process, a Args) (uint32, error) { // SendMessage
@@ -352,7 +370,7 @@ func RegisterUserWindow(p *Process) {
 			return 0, nil
 		}
 		sel, off := a.Ptr(2)
-		p.writeRect(sel, off, [4]int{w.X, w.Y, w.X + w.W, w.Y + w.H})
+		p.writeRect(sel, off, [4]int{w.AbsX, w.AbsY, w.AbsX + w.W, w.AbsY + w.H})
 		return 1, nil
 	}
 
@@ -507,7 +525,7 @@ func RegisterUserWindow(p *Process) {
 		p.note("SetWindowLong 索引 %d 超出 cbWndExtra（%d）", idx, len(w.Extra))
 		return 0, nil
 	}
-	h["USER.#286"] = func(p *Process, _ Args) (uint32, error) { return 0, nil } // GetDesktopWindow
+	h["USER.#286"] = func(p *Process, _ Args) (uint32, error) { return uint32(p.Desktop), nil }
 	h["USER.#243"] = func(p *Process, _ Args) (uint32, error) {
 		// GetDialogBaseUnits：系統字型的平均字寬與字高。Windows 3.1 在
 		// VGA 上是 8×16。**假說**，會影響對話框版面。
@@ -559,7 +577,7 @@ func (p *Process) defWindowProc(hwnd, msg, wParam uint16, lParam uint32) (uint32
 		return 1, nil
 	case WMEraseBkgnd:
 		dc, ok := p.dc(wParam)
-		if !ok || w.Class.Background == 0 {
+		if !ok || w.Class == nil || w.Class.Background == 0 {
 			return 1, nil
 		}
 		if obj, ok := p.Objects.Get(w.Class.Background, ObjBrush); ok && !obj.Brush.Hollow {
@@ -796,4 +814,6 @@ func RegisterAll(p *Process) {
 	RegisterGDI(p)
 	RegisterFile(p)
 	RegisterResource(p)
+	RegisterDialog(p)
+	RegisterMisc(p)
 }

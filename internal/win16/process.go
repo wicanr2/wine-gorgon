@@ -78,6 +78,9 @@ type Process struct {
 	Queue  []Msg
 	Timers []Timer
 
+	// Desktop 是桌面視窗的 handle。
+	Desktop uint16
+
 	// 滑鼠與焦點狀態。
 	Capture, Focus   uint16
 	CursorX, CursorY int
@@ -119,6 +122,12 @@ type Process struct {
 
 	// resources 是 FindResource 發出去的 HRSRC 對應表（1-based）。
 	resources []ne.Resource
+
+	dialogSeq int
+	msgCount  map[uint16]int
+
+	// Sounds 記下播過的音效檔名。
+	Sounds []string
 
 	// Libraries 記下 LoadLibrary 過的名字。
 	Libraries []string
@@ -273,6 +282,20 @@ func NewProcess(mod *Module) (*Process, error) {
 	p.Windows = map[uint16]*Window{}
 	p.nextHWnd = 0x0800
 	p.nextTimerID = 0x8000
+
+	// 桌面視窗：GetDesktopWindow 要回一個**真的視窗**。回 0 的話，
+	// 呼叫端拿它去 GetWindowRect 會拿不到值，而 RECT 是呼叫端的區域變數
+	// ——裡面是垃圾，於是對話框會被擺到螢幕外。這是那種「回 0 看起來
+	// 沒事」的錯誤。
+	desktop := &Window{
+		Handle: p.nextHWnd, Visible: true, Enabled: true,
+		W: p.ScreenW, H: p.ScreenH,
+		ClientW: p.ScreenW, ClientH: p.ScreenH,
+		ClassName: "#32769",
+	}
+	p.nextHWnd++
+	p.Desktop = desktop.Handle
+	p.Windows[desktop.Handle] = desktop
 	p.CallStepLimit = 50_000_000
 	p.BaseTime = time.Date(1993, 12, 14, 15, 19, 0, 0, time.UTC)
 	p.Clock = &StepClock{CPU: c}

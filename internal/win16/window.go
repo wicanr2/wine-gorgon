@@ -66,14 +66,40 @@ type Window struct {
 	ProcOff  uint16
 	Extra    []byte
 
-	// 視窗矩形與客戶區矩形，都是螢幕座標，右下不含。
-	X, Y, W, H       int
+	// X／Y 是**相對父視窗客戶區**的位置（頂層視窗則是螢幕座標），
+	// W／H 是整個視窗的大小。這和 Windows 一致：父視窗一移動，
+	// 子視窗跟著走而不必逐一改座標。
+	X, Y, W, H int
+
+	// AbsX／AbsY 與 ClientX／ClientY 是換算出來的**螢幕座標**，
+	// 由 layout 維護。命中測試與畫圖一律用這一組。
+	AbsX, AbsY       int
 	ClientX, ClientY int
 	ClientW, ClientH int
 
 	Visible bool
 	Enabled bool
 	HasMenu bool
+
+	// 對話框與控制項
+	IsDialog  bool
+	CtrlID    uint16
+	ClassName string
+	Children  []uint16
+	Checked   uint16
+
+	// 捲軸狀態，索引 0 是水平（SB_HORZ）、1 是垂直（SB_VERT）。
+	ScrollPos [2]int
+	ScrollMin [2]int
+	ScrollMax [2]int
+
+	// DlgProc 是對話框範本指定的 DLGPROC；由 DefDlgProc 呼叫。
+	DlgProcSel uint16
+	DlgProcOff uint16
+	inDlgProc  bool
+
+	// GoProc 非 nil 時，訊息由 Go 這一側處理（內建控制項用）。
+	GoProc func(w *Window, msg, wParam uint16, lParam uint32) (uint32, error)
 
 	// 無效區域（客戶座標，右下不含）。空的時候 NeedPaint 是 false。
 	NeedPaint  bool
@@ -163,10 +189,29 @@ func (p *Process) frameFor(style uint32, hasMenu bool) (l, t, r, b int) {
 	return
 }
 
-// layout 依視窗矩形與樣式算出客戶區。
+// layout 算出這個視窗（與它所有子視窗）的螢幕座標與客戶區。
+//
+// 子視窗的座標是相對父視窗客戶區的，所以父視窗一動就要整棵重算——
+// 不重算的話，被移動過的對話框上的按鈕會留在原地，而且是留在螢幕外。
 func (p *Process) layout(w *Window) {
-	l, t, r, b := p.frameFor(w.Style, w.HasMenu)
-	w.ClientX, w.ClientY = w.X+l, w.Y+t
+	// 只有 WS_CHILD 的位置是相對父視窗的。彈出式視窗（含對話框）
+	// 雖然也有 owner，但位置是螢幕座標——owner 移動不會帶著它跑。
+	ox, oy := 0, 0
+	if w.Style&WSChild != 0 && w.Parent != 0 {
+		if pw, ok := p.Windows[w.Parent]; ok {
+			ox, oy = pw.ClientX, pw.ClientY
+		}
+	}
+	w.AbsX, w.AbsY = ox+w.X, oy+w.Y
+
+	l, t, r, b := 0, 0, 0, 0
+	if w.Style&WSChild == 0 {
+		l, t, r, b = p.frameFor(w.Style, w.HasMenu)
+	} else {
+		// 子視窗只吃邊框，不吃標題列與選單列。
+		l, t, r, b = p.childFrameFor(w.Style)
+	}
+	w.ClientX, w.ClientY = w.AbsX+l, w.AbsY+t
 	w.ClientW, w.ClientH = w.W-l-r, w.H-t-b
 	if w.ClientW < 0 {
 		w.ClientW = 0
@@ -174,6 +219,33 @@ func (p *Process) layout(w *Window) {
 	if w.ClientH < 0 {
 		w.ClientH = 0
 	}
+	for _, c := range w.Children {
+		if cw, ok := p.Windows[c]; ok {
+			p.layout(cw)
+		}
+	}
+}
+
+// childFrameFor 是子視窗的非客戶區。子視窗沒有標題列——CIV.EXE 的
+// 選單項目是 WS_CHILD 加上 WS_BORDER 的自繪控制項，照頂層規則算的話
+// 每一個都會被吃掉 19 個像素的「標題列」，客戶區高度變成 0。
+func (p *Process) childFrameFor(style uint32) (l, t, r, b int) {
+	sm := p.Metrics
+	switch {
+	case style&WSThickFram != 0:
+		l, t, r, b = sm[32], sm[33], sm[32], sm[33]
+	case style&WSDlgFrame != 0:
+		l, t, r, b = sm[7], sm[8], sm[7], sm[8]
+	case style&WSBorder != 0:
+		l, t, r, b = sm[5], sm[6], sm[5], sm[6]
+	}
+	if style&WSVScroll != 0 {
+		r += sm[2]
+	}
+	if style&WSHScroll != 0 {
+		b += sm[3]
+	}
+	return
 }
 
 // Window 取一個視窗。
@@ -219,11 +291,22 @@ func (p *Process) Validate(w *Window, rect *[4]int) {
 	}
 }
 
+// MsgCount 統計每個訊息被送過幾次。畫面沒動的時候，這是最快看出
+// 「到底在跑什麼」的東西。
+func (p *Process) MsgCount() map[uint16]int { return p.msgCount }
+
 // SendMessage 直接呼叫視窗程序（不進佇列）。
 func (p *Process) SendMessage(hwnd, msg, wParam uint16, lParam uint32) (uint32, error) {
+	if p.msgCount == nil {
+		p.msgCount = map[uint16]int{}
+	}
+	p.msgCount[msg]++
 	w, ok := p.Windows[hwnd]
 	if !ok {
 		return 0, nil
+	}
+	if w.GoProc != nil {
+		return w.GoProc(w, msg, wParam, lParam)
 	}
 	return p.Call16(w.ProcSel, w.ProcOff,
 		hwnd, msg, wParam, uint16(lParam>>16), uint16(lParam))

@@ -88,10 +88,26 @@ civ1 這個案例還有一個結構上的便宜：它自己帶一套繪圖函式
 |---|---|---|
 | M0 | NE 載入器：段、重定位、匯入、進入點 | **完成**。對 CIV.EXE 的數字與獨立的 Python 解析器逐項吻合 |
 | M1a | 位址空間：段配置、重定位、API thunk | **完成**。CIV.EXE 133 段 577 KiB、20,124 筆重定位、157 個 thunk |
-| M1b | 16 位元 CPU 核心 ＋ selector 定址 | 進行中 |
-| M2 | KERNEL：`Global*`、檔案、資源 | 未開始 |
-| M3 | USER 訊息迴圈骨架 ＋ GDI DIB／BitBlt | 未開始 |
+| M1b | 16 位元 CPU 核心 ＋ selector 定址 | **完成**。8086／186／286 應用層指令，加 386 的 `66` 前綴與 32 位元暫存器 |
+| M2 | KERNEL：`Global*`、檔案、資源 | **完成**。全域堆積（含 >64 KiB 的 huge 配置）、檔案系統、NE 資源表 |
+| M3 | USER 訊息迴圈骨架 ＋ GDI BitBlt | 進行中。已跑到遊戲主選單並能用腳本點選；缺文字繪製 |
 | M4 | **主地圖第一幀與原版 oracle PNG 逐點相同** | 未開始 |
+
+目前 `nerun` 帶著原版安裝目錄，能跑 6,000 萬條指令、讀進五個
+`CIVDATA*.RSC`、建出遊戲自己的視窗類別（`CIV`、`CIVDIALOG`、`WDWSMMAP`、
+`WDWSTATUS`…），並停在可以操作的主選單：
+
+```
+  0806 V RanDoMRadio (215,272 156x18) "Start a New Game"
+  0807 V RanDoMRadio (215,290 156x18) "Load a Saved Game"
+  0808 V RanDoMRadio (215,308 156x18) "Play on EARTH"
+  0809 V RanDoMRadio (215,326 156x18) "Customize World"
+  080A V RanDoMRadio (215,344 156x18) "View Hall of Fame"
+  080B V RanDoMRadio (215,362 156x18) "Quit"
+```
+
+畫面上還是空的：那些選項的字是 1,662 次 `TextOut` 畫的，而字型還沒接
+（遊戲用它自己的 `CIVFONTS.FON`）。**下一步是點陣字型與圖片的 blit 路徑。**
 
 M4 是 MVP 的驗收線。選它是因為 civ1 那邊已經有原版的參考幀，判準現成——
 不必新做一組 oracle 來驗這個 oracle。

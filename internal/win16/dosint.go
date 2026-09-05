@@ -106,6 +106,79 @@ func (p *Process) onInt(c *cpu.CPU, n uint8) (bool, error) {
 			c.SetReg8(6, uint8(d.Second())) // DH
 			c.SetReg8(2, uint8(d.Nanosecond()/10_000_000))
 			return true, nil
+		case 0x3B: // 換目錄
+			path := p.CString(c.Seg[cpu.DS], c.R16(cpu.DX))
+			p.note("INT 21h CHDIR %q（只記下來，不真的換）", path)
+			c.SetFlag(cpu.FlagCF, false)
+			return true, nil
+		case 0x3D: // 開檔
+			path := p.CString(c.Seg[cpu.DS], c.R16(cpu.DX))
+			fh, err := p.FS.Open(path, int(uint8(c.R16(cpu.AX))))
+			if err != nil {
+				c.SetR16(cpu.AX, 2) // ENOENT
+				c.SetFlag(cpu.FlagCF, true)
+				return true, nil
+			}
+			c.SetR16(cpu.AX, fh)
+			c.SetFlag(cpu.FlagCF, false)
+			return true, nil
+		case 0x3C: // 建檔
+			path := p.CString(c.Seg[cpu.DS], c.R16(cpu.DX))
+			fh, err := p.FS.Create(path)
+			if err != nil {
+				c.SetR16(cpu.AX, 5) // EACCES
+				c.SetFlag(cpu.FlagCF, true)
+				return true, nil
+			}
+			c.SetR16(cpu.AX, fh)
+			c.SetFlag(cpu.FlagCF, false)
+			return true, nil
+		case 0x3E: // 關檔
+			p.FS.Close(c.R16(cpu.BX))
+			c.SetFlag(cpu.FlagCF, false)
+			return true, nil
+		case 0x3F, 0x40: // 讀／寫
+			f, ok := p.FS.File(c.R16(cpu.BX))
+			if !ok {
+				c.SetR16(cpu.AX, 6) // EBADF
+				c.SetFlag(cpu.FlagCF, true)
+				return true, nil
+			}
+			n := int(c.R16(cpu.CX))
+			sel, off := c.Seg[cpu.DS], c.R16(cpu.DX)
+			total := 0
+			p.Mod.Mem.Walk(sel, off, n, func(part []byte) bool {
+				var k int
+				var err error
+				if ah == 0x3F {
+					k, err = f.Read(part)
+				} else {
+					k, err = f.Write(part)
+				}
+				total += k
+				return err == nil && k == len(part)
+			})
+			c.SetR16(cpu.AX, uint16(total))
+			c.SetFlag(cpu.FlagCF, false)
+			return true, nil
+		case 0x42: // lseek
+			f, ok := p.FS.File(c.R16(cpu.BX))
+			if !ok {
+				c.SetR16(cpu.AX, 6)
+				c.SetFlag(cpu.FlagCF, true)
+				return true, nil
+			}
+			offset := int64(int32(uint32(c.R16(cpu.CX))<<16 | uint32(c.R16(cpu.DX))))
+			pos, err := f.Seek(offset, int(uint8(c.R16(cpu.AX))))
+			if err != nil {
+				c.SetR16(cpu.AX, 1)
+				c.SetFlag(cpu.FlagCF, true)
+				return true, nil
+			}
+			c.SetR16(cpu.AX, uint16(pos))
+			c.SetR16(cpu.DX, uint16(pos>>16))
+			c.SetFlag(cpu.FlagCF, false)
+			return true, nil
 		case 0x30: // 取 DOS 版本
 			c.SetR16(cpu.AX, 0x1606) // 6.22：AL=6 主版本、AH=22 次版本
 			c.SetR16(cpu.BX, 0)

@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/wicanr2/wine-gorgon/internal/cpu"
 	"github.com/wicanr2/wine-gorgon/internal/ne"
@@ -23,19 +24,21 @@ func main() {
 	stub := flag.Bool("stub", false, "把每一支 API 都當成「回 0 就好」，用來看呼叫序列走多遠")
 	data := flag.String("data", "", "原版資料目錄（唯讀掛成 C:\\CIV）")
 	write := flag.String("write", "", "可寫目錄；不給就一律不准寫")
+	shot := flag.String("shot", "", "結束時把整個畫面存成 PNG")
+	script := flag.String("script", "", "腳本檔：run／click／key／shot（見 cmd/nerun/script.go）")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "用法：nerun [選項] <NE 檔>")
 		os.Exit(2)
 	}
 
-	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write); err != nil {
+	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *script); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, steps uint64, traceN int, stub bool, data, write string) error {
+func run(path string, steps uint64, traceN int, stub bool, data, write, shot, script string) error {
 	img, err := ne.Open(path)
 	if err != nil {
 		return err
@@ -79,7 +82,12 @@ func run(path string, steps uint64, traceN int, stub bool, data, write string) e
 	fmt.Printf("進入點 %04X:%04X，DS=%04X SS:SP=%04X:%04X\n",
 		c.Seg[cpu.CS], c.IP, c.Seg[cpu.DS], c.Seg[cpu.SS], c.R16(cpu.SP))
 
-	runErr := p.Run(steps)
+	var runErr error
+	if script != "" {
+		runErr = runScript(p, script, func(s string) { fmt.Println(s) })
+	} else {
+		runErr = p.Run(steps)
+	}
 	fmt.Printf("執行 %d 條指令，攔到 %d 次 API 呼叫\n", c.Steps, len(p.Trace))
 
 	if n := len(p.Trace); n > 0 && traceN > 0 {
@@ -111,6 +119,85 @@ func run(path string, steps uint64, traceN int, stub bool, data, write string) e
 	}
 	fmt.Printf("視窗 %d 個、GDI 物件 %d 個、blit %d 次、TextOut %d 次\n",
 		len(p.Windows), p.Objects.Count(), p.Blits, len(p.TextOuts))
+	for _, hw := range p.WindowOrder {
+		w, ok := p.Window(hw)
+		if !ok {
+			continue
+		}
+		kind := "視窗"
+		if w.IsDialog {
+			kind = "對話框"
+		} else if w.ClassName != "" {
+			kind = w.ClassName
+		} else if w.Class != nil {
+			kind = w.Class.Name
+		}
+		vis := " "
+		if w.Visible {
+			vis = "V"
+		}
+		fmt.Printf("  %04X %s %-10s (%d,%d %dx%d) 客戶 (%d,%d %dx%d) id=%d %q\n",
+			w.Handle, vis, kind, w.X, w.Y, w.W, w.H,
+			w.ClientX, w.ClientY, w.ClientW, w.ClientH, w.CtrlID, w.Text)
+	}
+	if shot != "" {
+		if err := p.SavePNG(shot, p.Screen); err != nil {
+			return err
+		}
+		fmt.Printf("畫面存到 %s（%d×%d）\n", shot, p.Screen.W, p.Screen.H)
+	}
+	{
+		counts := map[string]int{}
+		for _, c := range p.Trace {
+			counts[winapi.Describe(c.Import.Key())]++
+		}
+		type kv struct {
+			k string
+			n int
+		}
+		var xs []kv
+		for k, n := range counts {
+			xs = append(xs, kv{k, n})
+		}
+		sort.Slice(xs, func(i, j int) bool { return xs[i].n > xs[j].n })
+		fmt.Println("呼叫次數前 20：")
+		for i, x := range xs {
+			if i >= 20 {
+				break
+			}
+			fmt.Printf("  %-32s %d\n", x.k, x.n)
+		}
+	}
+	if len(p.Classes) > 0 {
+		var names []string
+		for n := range p.Classes {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		fmt.Printf("註冊類別：%v\n", names)
+	}
+	if mc := p.MsgCount(); len(mc) > 0 {
+		type kv struct {
+			m uint16
+			n int
+		}
+		var xs []kv
+		for m, n := range mc {
+			xs = append(xs, kv{m, n})
+		}
+		sort.Slice(xs, func(i, j int) bool { return xs[i].n > xs[j].n })
+		fmt.Print("訊息：")
+		for i, x := range xs {
+			if i >= 10 {
+				break
+			}
+			fmt.Printf("%04X×%d ", x.m, x.n)
+		}
+		fmt.Println()
+	}
+	if len(p.Sounds) > 0 {
+		fmt.Printf("音效：%v\n", p.Sounds)
+	}
 	for _, n := range p.Notes {
 		fmt.Printf("備註：%s\n", n)
 	}
