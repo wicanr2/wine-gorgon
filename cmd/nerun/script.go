@@ -249,7 +249,12 @@ func findWindow(p *win16.Process, want string) (uint16, bool) {
 		return 0, false
 	}
 	lower := strings.ToLower(want)
-	for _, h := range p.WindowOrder {
+	// **由上而下找**：`WindowOrder` 是建立順序，後建的在上面，而點擊
+	// 落在最上層的那一個。由前往後找會挑到最舊的同名視窗——一連串
+	// 對話框都有「OK」時，那就是點到已經看不見的那一個，然後整個
+	// 腳本卡在後來才開的那個對話框的模態迴圈裡。
+	for i := len(p.WindowOrder) - 1; i >= 0; i-- {
+		h := p.WindowOrder[i]
 		w, ok := p.Window(h)
 		if !ok || !w.Visible {
 			continue

@@ -32,19 +32,20 @@ func main() {
 	openPath := flag.String("open", "", "檔案對話框要回傳的 DOS 路徑；空的表示使用者按取消")
 	script := flag.String("script", "", "腳本檔：run／click／key／shot（見 cmd/nerun/script.go）")
 	around := flag.String("around", "", "印出第一次呼叫這支 API 前後的紀錄（例：GDI.BITBLT）")
+	clockUS := flag.Uint("clock-us", 10, "StepClock 每條指令算幾微秒；調小可以讓「繪製本身花掉的虛擬時間」變小")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "用法：nerun [選項] <NE 檔>")
 		os.Exit(2)
 	}
 
-	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *script, *around, *screen, *openPath, *collapse); err != nil {
+	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *script, *around, *screen, *openPath, *collapse, uint32(*clockUS)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, steps uint64, traceN int, stub bool, data, write, shot, script, around, screen, openPath string, collapse bool) error {
+func run(path string, steps uint64, traceN int, stub bool, data, write, shot, script, around, screen, openPath string, collapse bool, clockUS uint32) error {
 	img, err := ne.Open(path)
 	if err != nil {
 		return err
@@ -61,6 +62,14 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 	if err != nil {
 		return err
 	}
+
+	// StepClock 的「每指令幾微秒」是可調的：預設 10 µs（約 10 萬條指令
+	// ＝ 1 秒）。**要量任何「一秒裡有多久在做 X」的東西時要調小**——
+	// 虛擬時間跟著指令走，所以繪製本身也會把時鐘往前推，佔空比會失真。
+	if sc, ok := p.Clock.(*win16.StepClock); ok && clockUS > 0 {
+		sc.PerStep = clockUS
+	}
+
 	p.FileDialogPath = openPath
 	p.CollapsePalette = collapse
 	p.LogBigBlits = os.Getenv("WG_LOG_BLITS") != ""

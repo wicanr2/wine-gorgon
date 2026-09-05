@@ -1,0 +1,20 @@
+# 活動單位閃爍：抓出兩個相位的 30×30 單位格。
+#
+# **要配 `-clock-us 1`**：StepClock 的虛擬時間跟著指令走，所以「繪製本身」
+# 也會把時鐘往前推。預設 10 µs／指令時，一次重畫要花掉約 230 ms 的虛擬
+# 時間，量出來的佔空比會從 483／517 ms 歪成 250／750 ms。調成 1 µs 之後
+# 同一個實驗量到 500／500 ms（取樣解析度 50 ms）。
+#
+# 兩次 clickwin OK：載入存檔之後還會再開一個對話框。`clickwin` 是由上而下
+# 找的，所以第二次會點到新開的那一個，不是已經關掉的舊 OK。
+waitfor Load a Saved Game
+clickwin Load a Saved Game
+run 5000000
+clickwin OK
+run 20000000
+clickwin OK
+run 20000000
+run 100000
+crop phaseA.png 291,297,30,30
+run 300000
+crop phaseB.png 291,297,30,30
