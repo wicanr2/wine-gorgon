@@ -622,6 +622,9 @@ func (p *Process) newWindowDC(w *Window, clip *[4]int) uint16 {
 		ClipR: w.ClientX + w.ClientW, ClipB: w.ClientY + w.ClientH,
 		BkMode: 2, // OPAQUE
 	}
+	// 新的 DC 預設選著系統字型（SYSTEM_FONT ＝ 13）。不給預設字型的話，
+	// 呼叫端不 SelectObject 就直接 TextOut 時什麼都不會出現。
+	d.Font = p.stockObject(13)
 	if clip != nil {
 		d.ClipL = max(d.ClipL, w.ClientX+clip[0])
 		d.ClipT = max(d.ClipT, w.ClientY+clip[1])
@@ -791,9 +794,71 @@ func RegisterUserDraw(p *Process) {
 		return 1, nil
 	}
 
-	h["USER.#85"] = func(p *Process, _ Args) (uint32, error) { // DrawText
-		p.note("DrawText 沒有畫字（還沒接原版點陣字型）")
-		return 0, nil
+	// DrawText(HDC, LPCSTR, int cch, RECT far*, UINT format)
+	//
+	// 只做單行 ＋ 對齊 ＋ DT_CALCRECT。CIV.EXE 的主選單項目走這一條，
+	// 不是 TextOut——所以少了它，選單上一個字都不會出現。
+	h["USER.#85"] = func(p *Process, a Args) (uint32, error) {
+		d, ok := p.dc(a.Word(0))
+		if !ok {
+			return 0, nil
+		}
+		sel, off := a.Ptr(2)
+		n := int(int16(a.Word(6)))
+		var b []byte
+		for i := 0; n < 0 || i < n; i++ {
+			v, err := p.Mod.Mem.ReadU8(sel, off+uint16(i))
+			if err != nil || v == 0 {
+				break
+			}
+			b = append(b, v)
+			if i > 1024 {
+				break
+			}
+		}
+		text := string(b)
+		rSel, rOff := a.Ptr(8)
+		r := p.readRect(rSel, rOff)
+		format := a.Word(12)
+
+		f := p.dcFont(d)
+		if f == nil {
+			p.note("DrawText 沒有可用的點陣字面")
+			return 0, nil
+		}
+		w, h := f.TextWidth(text), f.Height
+
+		const (
+			dtCenter   = 0x0001
+			dtRight    = 0x0002
+			dtVCenter  = 0x0004
+			dtBottom   = 0x0008
+			dtCalcRect = 0x0400
+		)
+		if format&dtCalcRect != 0 {
+			p.writeRect(rSel, rOff, [4]int{r[0], r[1], r[0] + w, r[1] + h})
+			return uint32(h), nil
+		}
+
+		x, y := r[0], r[1]
+		switch {
+		case format&dtCenter != 0:
+			x = r[0] + (r[2]-r[0]-w)/2
+		case format&dtRight != 0:
+			x = r[2] - w
+		}
+		switch {
+		case format&dtVCenter != 0:
+			y = r[1] + (r[3]-r[1]-h)/2
+		case format&dtBottom != 0:
+			y = r[3] - h
+		}
+		// DrawText 不吃 SetTextAlign 的基線設定，一律以左上角為準。
+		save := d.TextAlign
+		d.TextAlign = 0
+		p.drawText(d, x, y, text)
+		d.TextAlign = save
+		return uint32(h), nil
 	}
 
 	h["USER.#282"] = func(p *Process, a Args) (uint32, error) { // SelectPalette

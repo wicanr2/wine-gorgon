@@ -183,6 +183,7 @@ func RegisterGDI(p *Process) {
 	h["GDI.#52"] = func(p *Process, a Args) (uint32, error) { // CreateCompatibleDC
 		d := &DC{Surf: NewSurface(1, 1), BkMode: 2}
 		d.ClipR, d.ClipB = 1, 1
+		d.Font = p.stockObject(13)
 		hdc := p.Objects.Add(&Object{Kind: ObjDC, DC: d})
 		d.Handle = hdc
 		return uint32(hdc), nil
@@ -308,6 +309,7 @@ func RegisterGDI(p *Process) {
 		if sel != 0 {
 			f.FaceName = p.CString(sel, off)
 		}
+		f.Bitmap = p.matchFont(f)
 		return uint32(p.Objects.Add(&Object{Kind: ObjFont, Font: f})), nil
 	}
 	h["GDI.#57"] = func(p *Process, a Args) (uint32, error) { // CreateFontIndirect(LOGFONT far*)
@@ -317,6 +319,7 @@ func RegisterGDI(p *Process) {
 		wgt, _ := p.Mod.Mem.ReadU16(sel, off+8)
 		f := &Font{Height: int(int16(hgt)), Width: int(int16(wid)), Weight: int(int16(wgt))}
 		f.FaceName = p.CString(sel, off+20)
+		f.Bitmap = p.matchFont(f)
 		return uint32(p.Objects.Add(&Object{Kind: ObjFont, Font: f})), nil
 	}
 	h["GDI.#33"] = func(p *Process, a Args) (uint32, error) { // TextOut
@@ -329,38 +332,105 @@ func RegisterGDI(p *Process) {
 		}
 		x, y := int(int16(a.Word(2))), int(int16(a.Word(4)))
 		call := TextOutCall{DC: a.Word(0), X: x, Y: y, Text: string(b), Steps: p.CPU.Steps}
-		if d, ok := p.dc(a.Word(0)); ok {
+		d, ok := p.dc(a.Word(0))
+		if ok {
 			call.ScreenX, call.ScreenY = x+d.OrgX, y+d.OrgY
 			call.Window = d.Window
+			p.drawText(d, x, y, string(b))
 		}
 		p.TextOuts = append(p.TextOuts, call)
-		p.note("TextOut 只記錄不畫字（還沒接原版點陣字型）")
 		return 1, nil
 	}
-	h["GDI.#91"] = func(p *Process, a Args) (uint32, error) { // GetTextExtent
+	h["GDI.#91"] = func(p *Process, a Args) (uint32, error) { // GetTextExtent(HDC, LPCSTR, int)
+		sel, off := a.Ptr(2)
 		n := int(int16(a.Word(6)))
+		d, _ := p.dc(a.Word(0))
+		if f := p.dcFont(d); f != nil {
+			var s []byte
+			for i := 0; i < n; i++ {
+				v, _ := p.Mod.Mem.ReadU8(sel, off+uint16(i))
+				s = append(s, v)
+			}
+			return uint32(uint16(f.Height))<<16 | uint32(uint16(f.TextWidth(string(s)))), nil
+		}
 		w, hgt := p.textExtent(a.Word(0), n)
 		return uint32(uint16(hgt))<<16 | uint32(uint16(w)), nil
 	}
-	h["GDI.#93"] = func(p *Process, a Args) (uint32, error) { // GetTextMetrics
+	// GetTextMetrics(HDC, TEXTMETRIC far*)：Win16 的 TEXTMETRIC 前六個
+	// 欄位是 tmHeight／tmAscent／tmDescent／tmInternalLeading／
+	// tmExternalLeading／tmAveCharWidth，各兩個 byte。
+	// civ1 `docs/re/319` 靠 tmAscent 判斷文字陰影要不要 +1，所以這幾個值
+	// 不能亂填。
+	h["GDI.#93"] = func(p *Process, a Args) (uint32, error) {
 		sel, off := a.Ptr(2)
-		_, hgt := p.textExtent(a.Word(0), 1)
-		put := func(d uint16, v uint16) { _ = p.Mod.Mem.WriteU16(sel, off+d, v) }
-		put(0, uint16(hgt))         // tmHeight
-		put(2, uint16(hgt*3/4))     // tmAscent
-		put(4, uint16(hgt-hgt*3/4)) // tmDescent
-		put(10, 8)                  // tmAveCharWidth
-		put(12, 8)                  // tmMaxCharWidth
+		d, _ := p.dc(a.Word(0))
+		put := func(o uint16, v uint16) { _ = p.Mod.Mem.WriteU16(sel, off+o, v) }
+		if f := p.dcFont(d); f != nil {
+			put(0, uint16(f.Height))
+			put(2, uint16(f.Ascent))
+			put(4, uint16(f.Height-f.Ascent))
+			put(6, uint16(f.IntLeading))
+			put(8, uint16(f.ExtLeading))
+			put(10, uint16(f.AvgWidth))
+			put(12, uint16(f.MaxWidth))
+			put(14, uint16(f.Weight))
+			return 1, nil
+		}
+		put(0, 16)
+		put(2, 12)
+		put(4, 4)
+		put(10, 8)
+		put(12, 8)
 		return 1, nil
 	}
-	h["GDI.#330"] = func(p *Process, _ Args) (uint32, error) { // EnumFontFamilies
-		p.note("EnumFontFamilies 回 0（還沒接字型檔）")
-		return 0, nil
+	// EnumFontFamilies(HDC, LPCSTR family, FONTENUMPROC, LPARAM)
+	//
+	// 回呼收到 (LOGFONT far*, TEXTMETRIC far*, int type, LPARAM)。
+	// **列舉順序就是字型檔裡的順序**——civ1 `docs/re/319` 靠這一點認出
+	// CIVTIMES18 是第 17 個 face，所以順序不能亂。
+	h["GDI.#330"] = func(p *Process, a Args) (uint32, error) {
+		famSel, famOff := a.Ptr(2)
+		family := ""
+		if famSel != 0 {
+			family = p.CString(famSel, famOff)
+		}
+		procSel, procOff := a.Ptr(6)
+		lParam := a.Long(10)
+		if procSel == 0 && procOff == 0 {
+			return 0, nil
+		}
+		blk := p.Mod.Mem.Alloc("EnumFonts 暫存", 128)
+		defer p.Mod.Mem.Free(blk.Sel)
+		n := uint32(0)
+		for _, f := range p.Fonts {
+			if family != "" && !equalFoldASCII(f.Face, family) {
+				continue
+			}
+			p.writeLogFont(blk.Sel, 0, f)
+			p.writeTextMetric(blk.Sel, 50, f)
+			n++
+			r, err := p.Call16(procSel, procOff,
+				blk.Sel, 0, blk.Sel, 50, 0, // lplf、lpntm、FontType ＝ 0（點陣）
+				uint16(lParam>>16), uint16(lParam))
+			if err != nil {
+				return 0, err
+			}
+			if r == 0 {
+				break
+			}
+		}
+		return n, nil
 	}
 	h["GDI.#119"] = func(p *Process, a Args) (uint32, error) { // AddFontResource
 		sel, off := a.Ptr(0)
-		p.FontFiles = append(p.FontFiles, p.CString(sel, off))
-		return 1, nil
+		name := p.CString(sel, off)
+		p.FontFiles = append(p.FontFiles, name)
+		n, err := p.LoadFontFile(name)
+		if err != nil {
+			p.note("AddFontResource %q 失敗：%v", name, err)
+			return 0, nil
+		}
+		return uint32(n), nil
 	}
 	h["GDI.#136"] = func(p *Process, _ Args) (uint32, error) { return 1, nil } // RemoveFontResource
 }
@@ -378,18 +448,179 @@ type TextOutCall struct {
 	Steps            uint64
 }
 
-func (p *Process) textExtent(hdc uint16, n int) (int, int) {
-	w, hgt := 8, 16
-	if d, ok := p.dc(hdc); ok {
-		if obj, ok := p.Objects.Get(d.Font, ObjFont); ok && obj.Font.Height != 0 {
-			hgt = obj.Font.Height
-			if hgt < 0 {
-				hgt = -hgt
+// dcFont 取這個 DC 目前選著的點陣字面；沒有就回 nil。
+func (p *Process) dcFont(d *DC) *BitmapFont {
+	if d == nil {
+		return nil
+	}
+	if obj, ok := p.Objects.Get(d.Font, ObjFont); ok {
+		return obj.Font.Bitmap
+	}
+	return nil
+}
+
+// drawText 把一串字畫上去。
+//
+// 座標是**左上角**（TA_LEFT｜TA_TOP，Windows 的預設）；`TA_BASELINE`
+// 時 y 是基線，要往上退一個 ascent。背景模式 OPAQUE 要先填底色。
+func (p *Process) drawText(d *DC, x, y int, s string) {
+	f := p.dcFont(d)
+	if f == nil || s == "" {
+		if f == nil {
+			p.note("TextOut 沒有可用的點陣字面（字畫不出來）")
+		}
+		return
+	}
+	const taBaseline = 24 // TA_BASELINE ＝ 24（TA_BOTTOM｜TA_TOP 的組合值）
+	top := y
+	if d.TextAlign&taBaseline == taBaseline {
+		top = y - f.Ascent
+	}
+	if d.TextAlign&6 == 2 { // TA_RIGHT
+		x -= f.TextWidth(s)
+	} else if d.TextAlign&6 == 6 { // TA_CENTER
+		x -= f.TextWidth(s) / 2
+	}
+	fg := p.colorIndex(d.TextColor)
+	bg := p.colorIndex(d.BkColor)
+	const opaque = 2
+	if d.BkMode == opaque {
+		d.FillRect(x, top, f.TextWidth(s), f.Height, bg)
+	}
+	cx := x
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		w := f.CharWidth(c)
+		for gy := 0; gy < f.Height; gy++ {
+			for gx := 0; gx < w; gx++ {
+				if f.Pixel(c, gx, gy) {
+					d.SetPixel(cx+gx, top+gy, fg)
+				}
 			}
-			w = hgt / 2
+		}
+		cx += w
+	}
+}
+
+// matchFont 依 LOGFONT 挑一個載入好的字面。
+//
+// 規則刻意簡單：**字面名優先，其次高度最接近**。原版 Windows 的字型
+// 對應規則複雜得多，但 CIV.EXE 只用它自己 `AddFontResource` 進來的那幾個，
+// 名字對得上就沒有歧義。
+func (p *Process) matchFont(want *Font) *BitmapFont {
+	if len(p.Fonts) == 0 {
+		return nil
+	}
+	h := want.Height
+	if h < 0 {
+		h = -h
+	}
+	var best *BitmapFont
+	bestScore := 1 << 30
+	for _, f := range p.Fonts {
+		score := 0
+		if want.FaceName != "" && !equalFoldASCII(f.Face, want.FaceName) {
+			score += 10000
+		}
+		d := f.Height - h
+		if d < 0 {
+			d = -d
+		}
+		score += d * 10
+		if want.Weight >= 700 != (f.Weight >= 700) {
+			score += 5
+		}
+		if score < bestScore {
+			best, bestScore = f, score
 		}
 	}
-	return w * n, hgt
+	return best
+}
+
+func equalFoldASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if x >= 'a' && x <= 'z' {
+			x -= 32
+		}
+		if y >= 'a' && y <= 'z' {
+			y -= 32
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
+// writeLogFont 把一個字面寫成 Win16 的 LOGFONT（50 個 byte）。
+func (p *Process) writeLogFont(sel, off uint16, f *BitmapFont) {
+	put16 := func(o uint16, v uint16) { _ = p.Mod.Mem.WriteU16(sel, off+o, v) }
+	put8 := func(o uint16, v uint8) { _ = p.Mod.Mem.WriteU8(sel, off+o, v) }
+	put16(0, uint16(f.Height))
+	put16(2, uint16(f.AvgWidth))
+	put16(4, 0)
+	put16(6, 0)
+	put16(8, uint16(f.Weight))
+	put8(10, boolByte(f.Italic))
+	put8(11, 0)
+	put8(12, 0)
+	put8(13, 0)
+	put8(14, 0)
+	put8(15, 0)
+	put8(16, 0)
+	put8(17, 0)
+	for i := 0; i < 32; i++ {
+		var c byte
+		if i < len(f.Face) {
+			c = f.Face[i]
+		}
+		put8(18+uint16(i), c)
+	}
+}
+
+// writeTextMetric 把一個字面寫成 Win16 的 TEXTMETRIC（31 個 byte）。
+func (p *Process) writeTextMetric(sel, off uint16, f *BitmapFont) {
+	put16 := func(o uint16, v uint16) { _ = p.Mod.Mem.WriteU16(sel, off+o, v) }
+	put8 := func(o uint16, v uint8) { _ = p.Mod.Mem.WriteU8(sel, off+o, v) }
+	put16(0, uint16(f.Height))
+	put16(2, uint16(f.Ascent))
+	put16(4, uint16(f.Height-f.Ascent))
+	put16(6, uint16(f.IntLeading))
+	put16(8, uint16(f.ExtLeading))
+	put16(10, uint16(f.AvgWidth))
+	put16(12, uint16(f.MaxWidth))
+	put16(14, uint16(f.Weight))
+	put8(16, boolByte(f.Italic))
+	put8(17, 0)
+	put8(18, 0)
+	put8(19, f.FirstChar)
+	put8(20, f.LastChar)
+	put8(21, f.DefChar)
+	put8(22, f.BreakChar)
+	put8(23, 0)
+	put8(24, 0)
+	put16(25, 0)
+	put16(27, 36)
+	put16(29, 36)
+}
+
+func boolByte(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func (p *Process) textExtent(hdc uint16, n int) (int, int) {
+	d, _ := p.dc(hdc)
+	if f := p.dcFont(d); f != nil {
+		return f.AvgWidth * n, f.Height
+	}
+	return 8 * n, 16
 }
 
 func (p *Process) setPaletteEntries(a Args, animate bool) (uint32, error) {
@@ -474,7 +705,9 @@ func (p *Process) stockObject(i uint16) uint16 {
 	case 8: // NULL_PEN
 		obj = &Object{Kind: ObjPen, Pen: &Pen{Style: 5}, Stock: true}
 	default: // 字型一族
-		obj = &Object{Kind: ObjFont, Font: &Font{Height: 16, Width: 8, FaceName: "System"}, Stock: true}
+		f := &Font{Height: 16, Width: 8, FaceName: "System"}
+		f.Bitmap = p.matchFont(f)
+		obj = &Object{Kind: ObjFont, Font: f, Stock: true}
 	}
 	h := p.Objects.Add(obj)
 	p.stock[i] = h

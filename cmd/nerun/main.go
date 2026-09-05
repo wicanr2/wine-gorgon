@@ -59,6 +59,9 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 	}
 	p.FS.WriteRoot = write
 	defer p.FS.CloseAll()
+	if n, err := p.LoadInstalledFonts(); err == nil && n > 0 {
+		fmt.Printf("載入字型 %d 個字面（%v）\n", n, p.FontFiles)
+	}
 
 	if stub {
 		// 「其餘全部回 0」不是模擬，是**量測**：看沒接的 API 先當成成功的話，

@@ -137,6 +137,10 @@ type Process struct {
 	dialogSeq int
 	msgCount  map[uint16]int
 
+	// Fonts 是載入的點陣字面，順序就是檔案裡的順序——`EnumFonts` 的
+	// 列舉順序也是這個（civ1 `docs/re/319` 靠它認出 CIVTIMES18 是第 17 個）。
+	Fonts []*BitmapFont
+
 	// Sounds 記下播過的音效檔名。
 	Sounds []string
 

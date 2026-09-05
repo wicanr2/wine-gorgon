@@ -102,15 +102,16 @@ type Pen struct {
 	Index byte
 }
 
-// Font 是字型。**目前只記屬性，不畫字**——逐點相同的文字需要原版的
-// 點陣字型檔（CIV 會 AddFontResource 自己的 CIVFONTS.FON），那是獨立
-// 的一塊工作。
+// Font 是一份 LOGFONT 的要求，外加它實際對到的點陣字面。
 type Font struct {
 	Height   int
 	Width    int
 	Weight   int
 	Italic   bool
 	FaceName string
+
+	// Bitmap 是實際挑中的點陣字面；沒有載入任何字型時是 nil。
+	Bitmap *BitmapFont
 }
 
 // Palette 是一份邏輯調色盤。
