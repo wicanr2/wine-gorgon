@@ -164,11 +164,24 @@ func defaultMetrics(screenW, screenH int) map[int]int {
 }
 
 // frameFor 依樣式算出非客戶區在四邊各佔幾個像素。
+//
+// **可調整邊框（WS_THICKFRAME）實際保留的是 `SM_CXDLGFRAME`（3），
+// 不是 `SM_CXFRAME`（4）。** 這兩個數字要分開：應用程式拿
+// `GetSystemMetrics(SM_CXFRAME)` 去算「我要多大的視窗」，而 Windows
+// 扣掉的非客戶區只有 3。原版參考幀上兩件事同時成立——
+//
+//   - 小地圖視窗：遊戲要 160×100 的客戶區，開出來的視窗是 168×127
+//     （160 ＋ 2×4），而實際客戶區是 162×102（168 − 2×3）。
+//   - 主視窗：遊戲把它擺成 (168,0) 632×600，客戶區是 (171,41) 610×540
+//     （632 − 3 − 3 − 16 捲軸）。
+//
+// 兩邊都用 4 的話客戶區小 2 個像素、原點偏 1；兩邊都用 3 的話遊戲會把
+// 視窗開小 2 個像素。只有分開才對得起來。
 func (p *Process) frameFor(style uint32, hasMenu bool) (l, t, r, b int) {
 	sm := p.Metrics
 	switch {
 	case style&WSThickFram != 0:
-		l, t, r, b = sm[32], sm[33], sm[32], sm[33]
+		l, t, r, b = sm[7], sm[8], sm[7], sm[8]
 	case style&WSDlgFrame != 0:
 		l, t, r, b = sm[7], sm[8], sm[7], sm[8]
 	case style&WSBorder != 0:
@@ -232,9 +245,7 @@ func (p *Process) layout(w *Window) {
 func (p *Process) childFrameFor(style uint32) (l, t, r, b int) {
 	sm := p.Metrics
 	switch {
-	case style&WSThickFram != 0:
-		l, t, r, b = sm[32], sm[33], sm[32], sm[33]
-	case style&WSDlgFrame != 0:
+	case style&WSThickFram != 0, style&WSDlgFrame != 0:
 		l, t, r, b = sm[7], sm[8], sm[7], sm[8]
 	case style&WSBorder != 0:
 		l, t, r, b = sm[5], sm[6], sm[5], sm[6]

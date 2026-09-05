@@ -114,6 +114,9 @@ type Process struct {
 	BlitsBadDC int
 	stock      map[uint16]uint16
 
+	// LogBigBlits 打開時，畫到視窗上的大面積 blit 會記一筆。
+	LogBigBlits bool
+
 	// BitmapKinds 統計 CreateBitmap 用過哪些 (平面, bpp) 組合。
 	BitmapKinds map[[2]uint8]int
 

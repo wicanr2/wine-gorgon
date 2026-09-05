@@ -165,8 +165,17 @@ func RegisterGDI(p *Process) {
 		if obj, ok := p.Objects.Get(dst.Brush, ObjBrush); ok {
 			pattern = obj.Brush.Index
 		}
-		BitBlt(dst, int(int16(a.Word(2))), int(int16(a.Word(4))),
-			int(int16(a.Word(6))), int(int16(a.Word(8))),
+		dx, dy := int(int16(a.Word(2))), int(int16(a.Word(4)))
+		bw, bh := int(int16(a.Word(6))), int(int16(a.Word(8)))
+		// 大面積、畫到視窗上的 blit 記一筆（去重）：地圖落點對不上時，
+		// 要先分清楚是「遊戲傳的座標不同」還是「我們畫錯地方」。
+		if p.LogBigBlits && dst.Window != 0 && bw*bh >= 256 {
+			p.note("BitBlt → 視窗 %04X 客戶 (%d,%d) %dx%d，來源 %04X (%d,%d)，呼叫端 %04X:%04X",
+				dst.Window, dx, dy, bw, bh, a.Word(10),
+				int(int16(a.Word(12))), int(int16(a.Word(14))),
+				p.LastCall.FromCS, p.LastCall.FromIP)
+		}
+		BitBlt(dst, dx, dy, bw, bh,
 			src, int(int16(a.Word(12))), int(int16(a.Word(14))),
 			a.Long(16), pattern)
 		p.Blits++

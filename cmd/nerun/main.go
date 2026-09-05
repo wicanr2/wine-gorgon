@@ -63,6 +63,7 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 	}
 	p.FileDialogPath = openPath
 	p.CollapsePalette = collapse
+	p.LogBigBlits = os.Getenv("WG_LOG_BLITS") != ""
 
 	win16.RegisterAll(p)
 	if data != "" {

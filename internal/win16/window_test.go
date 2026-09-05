@@ -196,3 +196,25 @@ func TestGetWindowWordIDSplitsChildAndMenu(t *testing.T) {
 		t.Errorf("頂層視窗的 GWW_ID = %04X，預期 0300", got)
 	}
 }
+
+// 視窗框線的尺寸是從原版參考幀量出來的，不是文件上的常見值。
+// 主視窗在 (168,0) 632×600 時，客戶區必須是 (171,41) 610×540。
+func TestMainWindowClientMatchesOracle(t *testing.T) {
+	p := newTestProcess()
+	p.ScreenW, p.ScreenH = 800, 600
+	p.Metrics = defaultMetrics(800, 600)
+	w := &Window{
+		Handle: 0x0800,
+		Style:  WSCaption | WSThickFram | WSVScroll | WSHScroll,
+		X:      168, Y: 0, W: 632, H: 600,
+		HasMenu: true,
+	}
+	p.Windows[w.Handle] = w
+	p.layout(w)
+	if w.ClientX != 171 || w.ClientY != 41 {
+		t.Errorf("客戶區原點 (%d,%d)，預期 (171,41)", w.ClientX, w.ClientY)
+	}
+	if w.ClientW != 610 || w.ClientH != 540 {
+		t.Errorf("客戶區大小 %dx%d，預期 610x540", w.ClientW, w.ClientH)
+	}
+}

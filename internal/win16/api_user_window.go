@@ -92,6 +92,8 @@ func RegisterUserWindow(p *Process) {
 		w.HasMenu = style&WSChild == 0 && (menu != 0 || cls.MenuName != "")
 		w.Handle = p.nextHWnd
 		p.nextHWnd++
+		p.note("CreateWindow %q 樣式 %08X 位置 (%d,%d) %dx%d 父 %04X",
+			cls.Name, style, x, y, cw, ch, parent)
 		p.Windows[w.Handle] = w
 		p.WindowOrder = append(p.WindowOrder, w.Handle)
 		if pw, ok := p.Window(parent); ok && style&WSChild != 0 {
