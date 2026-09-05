@@ -73,6 +73,15 @@ func Load(img *ne.Image) (*Module, error) {
 		if size == 0 {
 			size = 1 // 空段也要有 selector，否則 mov es, ax 會炸
 		}
+		// 自動資料段（DGROUP）後面還要接區域堆疊與區域堆積——它們不在
+		// 檔案裡，但 SS:SP 一開始就指到那塊的尾巴。不加就會在第一次 push
+		// 越界。
+		if s.Index == img.AutoData {
+			size += int(img.StackSize) + int(img.HeapSize)
+			if size > 0x10000 {
+				size = 0x10000
+			}
+		}
 		blk := mod.Mem.Put(SegSelector(s.Index), fmt.Sprintf("seg %d", s.Index), make([]byte, size))
 		blk.Fixed = !s.Movable()
 		copy(blk.Data, s.Data)

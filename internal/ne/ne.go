@@ -104,6 +104,7 @@ type Image struct {
 	HeapSize    uint16
 	StackSize   uint16
 	Flags       uint16
+	AutoData    int // 自動資料段（DGROUP）的段號；0 表示沒有
 
 	ModuleNames []string // 1-based 使用；這裡是 0-based 陣列
 	Segments    []Segment
@@ -178,6 +179,7 @@ func Parse(raw []byte) (*Image, error) {
 	img.StackSize = get(0x12)
 	img.HeapSize = get(0x10)
 	img.SectorShift = get(0x32)
+	img.AutoData = int(get(0x0E))
 	if err != nil {
 		return nil, err
 	}
