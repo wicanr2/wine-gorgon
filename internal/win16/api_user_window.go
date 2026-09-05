@@ -708,7 +708,7 @@ func (p *Process) defWindowProc(hwnd, msg, wParam uint16, lParam uint32) (uint32
 			return 1, nil
 		}
 		if obj, ok := p.Objects.Get(w.Class.Background, ObjBrush); ok && !obj.Brush.Hollow {
-			dc.FillRect(0, 0, w.ClientW, w.ClientH, obj.Brush.Index)
+			p.fillWithBrush(dc, 0, 0, w.ClientW, w.ClientH, obj.Brush)
 		}
 		return 1, nil
 	case WMPaint:
@@ -723,6 +723,20 @@ func (p *Process) defWindowProc(hwnd, msg, wParam uint16, lParam uint32) (uint32
 		return 0, nil
 	}
 	return 0, nil
+}
+
+// fillWithBrush 用一個筆刷填滿矩形：實心就填索引，圖樣就鋪點陣圖。
+//
+// 圖樣筆刷不是特例——CIV.EXE 在 256 色模式下**要一塊純色時就是走圖樣**
+// （`sub_28175`：8×8 全部同一個 index → `CreatePatternBrush`）。
+func (p *Process) fillWithBrush(d *DC, x, y, w, h int, b *Brush) {
+	if b.Patt != 0 {
+		if obj, ok := p.Objects.Get(b.Patt, ObjBitmap); ok && obj.Bitmap != nil {
+			d.FillPattern(x, y, w, h, obj.Bitmap.Surf)
+			return
+		}
+	}
+	d.FillRect(x, y, w, h, b.Index)
 }
 
 // newWindowDC 造一個畫在螢幕上、原點在客戶區左上角的 DC。
@@ -920,7 +934,7 @@ func RegisterUserDraw(p *Process) {
 		if !ok || obj.Brush.Hollow {
 			return 1, nil
 		}
-		d.FillRect(r[0], r[1], r[2]-r[0], r[3]-r[1], obj.Brush.Index)
+		p.fillWithBrush(d, r[0], r[1], r[2]-r[0], r[3]-r[1], obj.Brush)
 		return 1, nil
 	}
 

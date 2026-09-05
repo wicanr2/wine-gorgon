@@ -158,3 +158,44 @@ func TestDACUsesBitReplication(t *testing.T) {
 		}
 	}
 }
+
+// TestFillPatternTilesBitmap 鎖住圖樣筆刷的填色。
+//
+// CIV.EXE 在 256 色模式下**要一塊純色時走的是圖樣**：`sub_28175` 建一張
+// 8×8、每個像素都是同一個 palette index 的點陣圖再 `CreatePatternBrush`。
+// 這是 Win16 拿到「就是這個 index」的標準做法——實心筆刷的 COLORREF 會
+// 再經過一次配色，配出來的未必是同一格。把圖樣筆刷當成 `Brush.Index` 用，
+// 那些區域就會全部變成索引 0。
+func TestFillPatternTilesBitmap(t *testing.T) {
+	surf := NewSurface(32, 32)
+	d := &DC{Surf: surf, ClipR: 32, ClipB: 32}
+	pat := NewSurface(8, 8)
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			pat.Set(x, y, byte(1+(x+y)%2)) // 棋盤：1／2
+		}
+	}
+	d.FillPattern(2, 3, 20, 20, pat)
+	// 鋪排以畫面座標對齊，所以 (2,3) 拿到的是圖樣的 (2,3)。
+	if got := surf.At(2, 3); got != pat.At(2, 3) {
+		t.Errorf("(2,3) 填了 %d，圖樣同位置是 %d", got, pat.At(2, 3))
+	}
+	if got := surf.At(11, 3); got != pat.At(3, 3) {
+		t.Errorf("(11,3) 填了 %d，圖樣 (3,3) 是 %d", got, pat.At(3, 3))
+	}
+	// 矩形外不動。
+	if surf.At(1, 3) != 0 || surf.At(22, 3) != 0 {
+		t.Error("填到矩形外了")
+	}
+	// 全同色的圖樣等同實心填色——這才是 CIV.EXE 真正在用的形狀。
+	solid := NewSurface(8, 8)
+	for i := range solid.Bits {
+		solid.Bits[i] = 0x0F
+	}
+	d.FillPattern(0, 0, 32, 32, solid)
+	for _, xy := range [][2]int{{0, 0}, {5, 9}, {31, 31}} {
+		if got := surf.At(xy[0], xy[1]); got != 0x0F {
+			t.Errorf("(%d,%d) 填了 %d，預期 0x0F", xy[0], xy[1], got)
+		}
+	}
+}

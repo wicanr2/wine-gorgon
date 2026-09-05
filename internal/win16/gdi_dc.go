@@ -79,6 +79,28 @@ func (d *DC) FillRect(x, y, w, h int, v byte) {
 	}
 }
 
+// FillPattern 用一張點陣圖鋪排填滿矩形（圖樣筆刷）。
+//
+// **不能只看筆刷的顏色**：CIV.EXE 在 256 色模式下要一塊純色時，走的是
+// `sub_28175` → 建一張 8×8、每個像素都是同一個 palette index 的點陣圖
+// → `CreatePatternBrush`。把圖樣筆刷當成 `Index` 用的話，那些區域會全部
+// 變成索引 0（黑）——Status 面板整片黑就是這樣來的。
+//
+// 鋪排以**畫面座標**對齊（Windows 的 brush origin 預設是 (0,0)）。
+func (d *DC) FillPattern(x, y, w, h int, pat *Surface) {
+	if pat == nil || pat.W == 0 || pat.H == 0 {
+		return
+	}
+	sx, sy, sw, sh := d.clipTo(x, y, w, h)
+	for j := 0; j < sh; j++ {
+		row := (sy + j) * d.Surf.Stride
+		py := (sy + j) % pat.H
+		for i := 0; i < sw; i++ {
+			d.Surf.Bits[row+sx+i] = pat.At((sx+i)%pat.W, py)
+		}
+	}
+}
+
 // rop3 是三元光柵運算的真值表索引。
 //
 // GDI 的 32 位元 ROP 碼裡，第 16..23 位就是那張真值表：對每一個位元平面，

@@ -127,6 +127,39 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 		return nil
 	case "shot":
 		return p.SavePNG(args[0], p.Screen)
+	case "peek":
+		// 印出執行時記憶體的內容。靜態 dump（nedump）看得到的是檔案映像，
+		// 而「這個全域現在是多少」只有跑起來才知道——色組那一類 runtime
+		// 才填的表就要靠它。
+		var sel, off, n uint64
+		parts := strings.SplitN(args[0], ":", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("peek 的位址要寫成 sel:off")
+		}
+		sel, err := strconv.ParseUint(parts[0], 16, 16)
+		if err != nil {
+			return err
+		}
+		off, err = strconv.ParseUint(parts[1], 16, 16)
+		if err != nil {
+			return err
+		}
+		n = 16
+		if len(args) > 1 {
+			if n, err = strconv.ParseUint(args[1], 0, 16); err != nil {
+				return err
+			}
+		}
+		var b []byte
+		for i := uint64(0); i < n; i++ {
+			v, err := p.Mod.Mem.ReadU8(uint16(sel), uint16(off+i))
+			if err != nil {
+				return err
+			}
+			b = append(b, v)
+		}
+		echo(fmt.Sprintf("peek %04X:%04X = % 02X", sel, off, b))
+		return nil
 	case "raw":
 		return p.SaveIndexRaw(args[0], p.Screen)
 	case "crop":
