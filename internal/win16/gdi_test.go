@@ -97,6 +97,8 @@ func TestRealizePaletteStartsAtTen(t *testing.T) {
 		{255, 255, 255}, // 和靜態色 255 一樣 → 索引 255
 		{4, 5, 6},
 	}}
+	pal.Flags = make([]uint8, len(pal.Entries))
+	p.CollapsePalette = true // 這一支測的就是收攏行為
 	if n := p.realizePalette(pal); n != 2 {
 		t.Errorf("換了 %d 格，預期 2", n)
 	}
@@ -120,5 +122,39 @@ func TestColorIndexFindsNearest(t *testing.T) {
 	}
 	if got := p.colorIndex(0x00C0C0C0); got != 7 {
 		t.Errorf("淺灰 → %d，預期 7", got)
+	}
+}
+
+// PC_NOCOLLAPSE 的項目不能被收攏到靜態色。收攏一格會讓後面所有的實體
+// 索引往前位移，而遊戲的圖形資料是照「邏輯索引 ＋ 10」寫死的。
+func TestRealizePaletteHonoursNoCollapse(t *testing.T) {
+	p := &Process{}
+	p.initPalette()
+	pal := &Palette{
+		Entries: []RGB{{0, 0, 0}, {1, 2, 3}, {255, 255, 255}, {4, 5, 6}},
+		Flags:   []uint8{0x04, 0x04, 0x04, 0x04},
+	}
+	p.realizePalette(pal)
+	for i, want := range []byte{10, 11, 12, 13} {
+		if pal.Map[i] != want {
+			t.Errorf("邏輯索引 %d → 實體 %d，預期 %d（不收攏就是連號）",
+				i, pal.Map[i], want)
+		}
+	}
+}
+
+// DAC 量化必須用位元複製。差一個位元就足以讓每一個像素都判定為不同。
+func TestDACUsesBitReplication(t *testing.T) {
+	cases := []struct{ in, want uint8 }{
+		{128, 130}, // 草地綠：6 位元 32 → 130
+		{73, 73},   // 海洋綠通道：18 → 73
+		{50, 48},   // 棕色綠通道：12 → 48
+		{255, 255},
+		{0, 0},
+	}
+	for _, c := range cases {
+		if got := dac(c.in); got != c.want {
+			t.Errorf("dac(%d) = %d，預期 %d", c.in, got, c.want)
+		}
 	}
 }

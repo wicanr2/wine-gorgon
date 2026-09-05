@@ -164,15 +164,8 @@ func RegisterUserWindow(p *Process) {
 		if !ok {
 			return 0, nil
 		}
-		if _, err := p.SendMessage(w.Handle, WMDestroy, 0, 0); err != nil {
+		if err := p.destroyWindow(w); err != nil {
 			return 0, err
-		}
-		delete(p.Windows, w.Handle)
-		for i, h := range p.WindowOrder {
-			if h == w.Handle {
-				p.WindowOrder = append(p.WindowOrder[:i], p.WindowOrder[i+1:]...)
-				break
-			}
 		}
 		return 1, nil
 	}
@@ -585,6 +578,65 @@ func RegisterUserWindow(p *Process) {
 	h["USER.#223"] = func(p *Process, _ Args) (uint32, error) { return 0, nil } // SetKeyboardState
 }
 
+// destroyWindow 銷毀一個視窗**和它所有的子視窗**。
+//
+// 不銷毀子視窗的話，它們會留在視窗表裡：畫面上還看得到、還接得到滑鼠，
+// 而且因為命中測試是「後建的在上面」，一個早就該消失的按鈕會攔下之後
+// 的點擊。這種殘留在對拍時是致命的。
+func (p *Process) destroyWindow(w *Window) error {
+	rect := [4]int{w.AbsX, w.AbsY, w.AbsX + w.W, w.AbsY + w.H}
+	for _, c := range append([]uint16(nil), w.Children...) {
+		if cw, ok := p.Window(c); ok {
+			if err := p.destroyWindow(cw); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := p.SendMessage(w.Handle, WMDestroy, 0, 0); err != nil {
+		return err
+	}
+	delete(p.Windows, w.Handle)
+	for i, h := range p.WindowOrder {
+		if h == w.Handle {
+			p.WindowOrder = append(p.WindowOrder[:i], p.WindowOrder[i+1:]...)
+			break
+		}
+	}
+	if pw, ok := p.Window(w.Parent); ok {
+		for i, c := range pw.Children {
+			if c == w.Handle {
+				pw.Children = append(pw.Children[:i], pw.Children[i+1:]...)
+				break
+			}
+		}
+	}
+	if w.Visible {
+		p.invalidateArea(rect)
+	}
+	return nil
+}
+
+// invalidateArea 把螢幕上一塊區域底下的視窗標成要重畫。
+//
+// 視窗消失之後沒有人重畫的話，螢幕上會留著已經不存在的東西的像素。
+func (p *Process) invalidateArea(r [4]int) {
+	for _, h := range p.WindowOrder {
+		w, ok := p.Window(h)
+		if !ok || !w.Visible {
+			continue
+		}
+		l := max(r[0], w.ClientX)
+		t := max(r[1], w.ClientY)
+		rr := min(r[2], w.ClientX+w.ClientW)
+		b := min(r[3], w.ClientY+w.ClientH)
+		if rr <= l || b <= t {
+			continue
+		}
+		rect := [4]int{l - w.ClientX, t - w.ClientY, rr - w.ClientX, b - w.ClientY}
+		p.Invalidate(w, &rect, true)
+	}
+}
+
 // showWindow 是 ShowWindow 與 CreateWindow(WS_VISIBLE) 的共同路徑。
 func (p *Process) showWindow(w *Window, cmd uint16) error {
 	visible := cmd != 0 // SW_HIDE ＝ 0
@@ -600,6 +652,8 @@ func (p *Process) showWindow(w *Window, cmd uint16) error {
 	}
 	if visible {
 		p.Invalidate(w, nil, true)
+	} else {
+		p.invalidateArea([4]int{w.AbsX, w.AbsY, w.AbsX + w.W, w.AbsY + w.H})
 	}
 	return nil
 }
@@ -732,7 +786,13 @@ func (p *Process) windowWord(hwnd uint16, idx int, set *uint16) (uint32, error) 
 		return uint32(w.Instance), nil
 	case -8: // GWW_HWNDPARENT
 		return uint32(w.Parent), nil
-	case -12: // GWW_ID
+	case -12: // GWW_ID：子視窗是控制項編號，頂層視窗才是選單 handle。
+		// 這兩個在 CreateWindow 是同一個參數（hMenu），存的時候分開了，
+		// 讀的時候也要分開——不分開的話控制項的 WM_COMMAND 會帶 wParam=0，
+		// 而父視窗分不出是哪一個按鈕被按了。
+		if w.Style&WSChild != 0 {
+			return uint32(w.CtrlID), nil
+		}
 		return uint32(w.Menu), nil
 	}
 	if idx < 0 || idx+2 > len(w.Extra) {

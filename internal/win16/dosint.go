@@ -106,6 +106,21 @@ func (p *Process) onInt(c *cpu.CPU, n uint8) (bool, error) {
 			c.SetReg8(6, uint8(d.Second())) // DH
 			c.SetReg8(2, uint8(d.Nanosecond()/10_000_000))
 			return true, nil
+		case 0x43: // 取／設檔案屬性
+			path := p.CString(c.Seg[cpu.DS], c.R16(cpu.DX))
+			if uint8(c.R16(cpu.AX)) != 0 {
+				// 設屬性：唯讀根目錄上不做事，但也不要報錯。
+				c.SetFlag(cpu.FlagCF, false)
+				return true, nil
+			}
+			if !p.FS.Exists(path) {
+				c.SetR16(cpu.AX, 2) // ENOENT
+				c.SetFlag(cpu.FlagCF, true)
+				return true, nil
+			}
+			c.SetR16(cpu.CX, 0x20) // FILE_ATTRIBUTE_ARCHIVE
+			c.SetFlag(cpu.FlagCF, false)
+			return true, nil
 		case 0x3B: // 換目錄
 			path := p.CString(c.Seg[cpu.DS], c.R16(cpu.DX))
 			p.note("INT 21h CHDIR %q（只記下來，不真的換）", path)

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -66,6 +67,44 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 			echo("    " + line)
 		}
 		return runErr
+	case "waitfor":
+		// 等到某個標題含這段文字的視窗出現。**用固定步數等是不可靠的**：
+		// 同一個畫面在不同輸入下要跑的指令數差好幾倍，寫死就會在下一次
+		// 改動之後靜靜地點到空氣。
+		want := strings.Join(args, " ")
+		limit := uint64(400_000_000)
+		if i := strings.LastIndex(want, " @"); i >= 0 {
+			if v, err := strconv.ParseUint(want[i+2:], 10, 64); err == nil {
+				limit, want = v, strings.TrimSpace(want[:i])
+			}
+		}
+		start := p.CPU.Steps
+		for p.CPU.Steps-start < limit {
+			if h, ok := findWindow(p, want); ok {
+				echo(fmt.Sprintf("waitfor %q → 視窗 %04X（等了 %d 條指令）",
+					want, h, p.CPU.Steps-start))
+				return nil
+			}
+			if err := p.Run(2_000_000); err != nil {
+				return err
+			}
+			if p.CPU.Halt {
+				break
+			}
+		}
+		return fmt.Errorf("等不到標題含 %q 的視窗（跑了 %d 條指令）", want, p.CPU.Steps-start)
+	case "clickwin":
+		// 點某個視窗的正中央。比寫死座標可靠：版面會隨字型度量改變。
+		want := strings.Join(args, " ")
+		h, ok := findWindow(p, want)
+		if !ok {
+			return fmt.Errorf("找不到標題含 %q 的視窗", want)
+		}
+		w, _ := p.Window(h)
+		x, y := w.ClientX+w.ClientW/2, w.ClientY+w.ClientH/2
+		got := p.Click(x, y)
+		echo(fmt.Sprintf("clickwin %q → 視窗 %04X 於 (%d,%d)，命中 %04X", want, h, x, y, got))
+		return nil
 	case "click":
 		x, y, err := pair(args[0])
 		if err != nil {
@@ -150,6 +189,45 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 				e.Steps, e.HWnd, name, e.WParam, e.LParam))
 		}
 		return nil
+	case "palette":
+		for i := 0; i < 256; i++ {
+			c := p.SysPalette[i]
+			if c.R|c.G|c.B == 0 && i >= 10 && i < 246 {
+				continue
+			}
+			echo(fmt.Sprintf("  pal %3d = %3d,%3d,%3d", i, c.R, c.G, c.B))
+		}
+		return nil
+	case "hist":
+		// 一塊區域裡各個調色盤索引出現幾次，附上它的 RGB。
+		// 「顏色不對」要先分清楚是**索引錯**還是**索引對應的顏色錯**。
+		x, y, w, h, err := quad(args[0])
+		if err != nil {
+			return err
+		}
+		counts := map[byte]int{}
+		for j := 0; j < h; j++ {
+			for i := 0; i < w; i++ {
+				counts[p.Screen.At(x+i, y+j)]++
+			}
+		}
+		type kv struct {
+			i byte
+			n int
+		}
+		var xs []kv
+		for i, n := range counts {
+			xs = append(xs, kv{i, n})
+		}
+		sort.Slice(xs, func(a, b int) bool { return xs[a].n > xs[b].n })
+		for k, e := range xs {
+			if k >= 12 {
+				break
+			}
+			c := p.SysPalette[e.i]
+			echo(fmt.Sprintf("  索引 %3d ×%-6d RGB(%3d,%3d,%3d)", e.i, e.n, c.R, c.G, c.B))
+		}
+		return nil
 	case "print":
 		for _, hw := range p.WindowOrder {
 			w, ok := p.Window(hw)
@@ -163,6 +241,24 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 		return nil
 	}
 	return fmt.Errorf("不認得的指令 %q", cmd)
+}
+
+// findWindow 找標題含指定文字的可見視窗（不分大小寫）。
+func findWindow(p *win16.Process, want string) (uint16, bool) {
+	if want == "" {
+		return 0, false
+	}
+	lower := strings.ToLower(want)
+	for _, h := range p.WindowOrder {
+		w, ok := p.Window(h)
+		if !ok || !w.Visible {
+			continue
+		}
+		if strings.Contains(strings.ToLower(w.Text), lower) {
+			return h, true
+		}
+	}
+	return 0, false
 }
 
 func pair(s string) (int, int, error) {

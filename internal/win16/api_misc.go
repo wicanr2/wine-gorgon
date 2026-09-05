@@ -1,5 +1,51 @@
 package win16
 
+// fileDialog 是 GetOpenFileName／GetSaveFileName 的共同實作。
+func (p *Process) fileDialog(a Args) (uint32, error) {
+	if p.FileDialogPath == "" {
+		return 0, nil // 使用者按了取消
+	}
+	sel, off := a.Ptr(0)
+	fileOff, _ := p.Mod.Mem.ReadU16(sel, off+24)
+	fileSel, _ := p.Mod.Mem.ReadU16(sel, off+26)
+	maxLo, _ := p.Mod.Mem.ReadU16(sel, off+28)
+	if fileSel == 0 {
+		p.note("GetOpenFileName 的 lpstrFile 是空指標")
+		return 0, nil
+	}
+	path := p.FileDialogPath
+	if int(maxLo) > 0 && len(path)+1 > int(maxLo) {
+		p.note("GetOpenFileName 的緩衝區只有 %d bytes，放不下 %q", maxLo, path)
+		return 0, nil
+	}
+	for i := 0; i < len(path); i++ {
+		if err := p.Mod.Mem.WriteU8(fileSel, fileOff+uint16(i), path[i]); err != nil {
+			return 0, err
+		}
+	}
+	if err := p.Mod.Mem.WriteU8(fileSel, fileOff+uint16(len(path)), 0); err != nil {
+		return 0, err
+	}
+	// nFileOffset／nFileExtension：檔名與副檔名在字串裡的位置。
+	nameOff, extOff := 0, len(path)
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '\\' || path[i] == ':' {
+			nameOff = i + 1
+			break
+		}
+	}
+	for i := len(path) - 1; i > nameOff; i-- {
+		if path[i] == '.' {
+			extOff = i + 1
+			break
+		}
+	}
+	_ = p.Mod.Mem.WriteU16(sel, off+52, uint16(nameOff))
+	_ = p.Mod.Mem.WriteU16(sel, off+54, uint16(extOff))
+	p.FileDialogCalls = append(p.FileDialogCalls, path)
+	return 1, nil
+}
+
 // RegisterMisc 登記 MMSYSTEM 與 COMMDLG。
 //
 // 這兩個模組都不影響畫面，但**不能靜靜回 0**：遊戲會用回傳值決定要不要
@@ -23,8 +69,15 @@ func RegisterMisc(p *Process) {
 		return 0, nil
 	}
 
-	h["COMMDLG.#1"] = func(p *Process, _ Args) (uint32, error) { return 0, nil }  // GetOpenFileName：取消
-	h["COMMDLG.#2"] = func(p *Process, _ Args) (uint32, error) { return 0, nil }  // GetSaveFileName：取消
+	// GetOpenFileName／GetSaveFileName(OPENFILENAME far*)
+	//
+	// 沒有畫面可以讓人挑檔案，所以改成「由外面決定它回什麼」：
+	// `Process.FileDialogPath` 有值就當成使用者選了那個檔，空的就是按了取消。
+	// 這是把**互動**換成**參數**——對拍腳本要能重現，不能靠人點。
+	//
+	// Win16 的 OPENFILENAME：+24 lpstrFile（far 指標）、+28 nMaxFile。
+	h["COMMDLG.#1"] = func(p *Process, a Args) (uint32, error) { return p.fileDialog(a) }
+	h["COMMDLG.#2"] = func(p *Process, a Args) (uint32, error) { return p.fileDialog(a) }
 	h["COMMDLG.#26"] = func(p *Process, _ Args) (uint32, error) { return 0, nil } // CommDlgExtendedError
 
 	h["USER.#171"] = func(p *Process, _ Args) (uint32, error) { return 1, nil } // WinHelp

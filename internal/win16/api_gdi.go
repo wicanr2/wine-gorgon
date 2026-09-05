@@ -193,6 +193,7 @@ func RegisterGDI(p *Process) {
 	h["GDI.#48"] = func(p *Process, a Args) (uint32, error) {
 		w, hgt := int(int16(a.Word(0))), int(int16(a.Word(2)))
 		planes, bpp := uint8(a.Word(4)), uint8(a.Word(6))
+		p.BitmapKinds[[2]uint8{planes, bpp}]++
 		if planes != 1 || (bpp != 8 && bpp != 1) {
 			p.note("CreateBitmap %d 平面 %d bpp（只做 1 平面的 1 或 8 bpp）", planes, bpp)
 		}
@@ -265,13 +266,15 @@ func RegisterGDI(p *Process) {
 	h["GDI.#360"] = func(p *Process, a Args) (uint32, error) {
 		sel, off := a.Ptr(0)
 		n, _ := p.Mod.Mem.ReadU16(sel, off+2)
-		pal := &Palette{Entries: make([]RGB, n)}
+		pal := &Palette{Entries: make([]RGB, n), Flags: make([]uint8, n)}
 		for i := 0; i < int(n); i++ {
 			b := off + 4 + uint16(i*4)
 			r, _ := p.Mod.Mem.ReadU8(sel, b)
 			g, _ := p.Mod.Mem.ReadU8(sel, b+1)
 			bl, _ := p.Mod.Mem.ReadU8(sel, b+2)
+			fl, _ := p.Mod.Mem.ReadU8(sel, b+3)
 			pal.Entries[i] = RGB{r, g, bl}
+			pal.Flags[i] = fl
 		}
 		return uint32(p.Objects.Add(&Object{Kind: ObjPalette, Palette: pal})), nil
 	}
@@ -644,8 +647,13 @@ func (p *Process) setPaletteEntries(a Args, animate bool) (uint32, error) {
 		g, _ := p.Mod.Mem.ReadU8(sel, b+1)
 		bl, _ := p.Mod.Mem.ReadU8(sel, b+2)
 		obj.Palette.Entries[idx] = RGB{r, g, bl}
-		if animate && idx < len(p.PalMap) {
-			p.SysPalette[p.PalMap[idx]] = RGB{r, g, bl}
+		if idx < len(obj.Palette.Flags) {
+			fl, _ := p.Mod.Mem.ReadU8(sel, b+3)
+			obj.Palette.Flags[idx] = fl
+		}
+		// AnimatePalette 動的是**這一份**調色盤自己的實體格子。
+		if animate && idx < len(obj.Palette.Map) {
+			p.SysPalette[obj.Palette.Map[idx]] = RGB{r, g, bl}
 		}
 		n++
 	}

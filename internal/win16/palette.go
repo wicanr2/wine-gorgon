@@ -33,24 +33,45 @@ func (p *Process) initPalette() {
 func (p *Process) realizePalette(pal *Palette) int {
 	changed := 0
 	next := FirstFreePaletteIndex
-	p.PalMap = make([]byte, len(pal.Entries))
+	pal.Map = make([]byte, len(pal.Entries))
 	for i, e := range pal.Entries {
-		if idx, ok := staticIndex(e); ok {
-			p.PalMap[i] = byte(idx)
-			continue
+		// PC_NOCOLLAPSE（0x04）表示「就算和靜態色一樣也另外給一格」。
+		// **這個旗標不能忽略**：收攏一格會讓後面所有的實體索引往前位移，
+		// 而遊戲的圖形資料是照「邏輯索引 ＋ 10」寫死的（civ1 `docs/re/315`
+		// 一族量到的 `圖集 index ＋ 0x0A`）。位移之後畫面上每一個顏色都錯，
+		// 但形狀完全正確——看起來像調色盤壞掉，不像對應錯。
+		// **實測：不收攏。** 邏輯索引 i 一律落在實體索引 10+i。
+		//
+		// 證據有兩份：civ1 專案在原版上量到「圖集索引 ＋ 0x0A ＝ 實體索引」
+		// （`docs/re/315` 一族），以及這裡的直接比對——收攏之後灰階多佔一格，
+		// 後面所有顏色往前位移一格，畫面上的地形變成紅橙雜訊；不收攏之後
+		// 海洋是 (0,73,128)、草地 (1,128,1)、丘陵 (142,103,28)，
+		// 和參考幀量到的 (0,73,130)／(0,130,0)／(142,101,28) 逐項吻合
+		// （差值來自 6 位元 DAC，見 screenshot.go）。
+		//
+		// `CollapsePalette` 留著是為了將來遇到真的需要收攏的程式；
+		// 預設關閉。
+		const pcNoCollapse = 0x04
+		noCollapse := !p.CollapsePalette || (i < len(pal.Flags) && pal.Flags[i]&pcNoCollapse != 0)
+		if !noCollapse {
+			if idx, ok := staticIndex(e); ok {
+				pal.Map[i] = byte(idx)
+				continue
+			}
 		}
 		if next > 245 {
 			p.note("邏輯調色盤有 %d 格，實體調色盤（10..245）放不下", len(pal.Entries))
-			p.PalMap[i] = byte(245)
+			pal.Map[i] = byte(245)
 			continue
 		}
 		if p.SysPalette[next] != e {
 			p.SysPalette[next] = e
 			changed++
 		}
-		p.PalMap[i] = byte(next)
+		pal.Map[i] = byte(next)
 		next++
 	}
+	p.PalMap = pal.Map
 	return changed
 }
 

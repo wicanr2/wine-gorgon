@@ -116,6 +116,15 @@ func resolveCase(root, rel string) string {
 	return cur
 }
 
+// Exists 回答一個 DOS 路徑存不存在（不開檔）。
+func (fs *FileSystem) Exists(dos string) bool {
+	if p := fs.hostPath(dos, false); p != "" {
+		_, err := os.Stat(p)
+		return err == nil
+	}
+	return false
+}
+
 // Open 開一個檔；mode 是 OpenFile 的 OF_* 低兩位（0 讀、1 寫、2 讀寫）。
 func (fs *FileSystem) Open(dos string, mode int) (uint16, error) {
 	write := mode&3 != 0

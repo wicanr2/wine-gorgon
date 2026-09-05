@@ -23,6 +23,16 @@ type Bus interface {
 	WriteU16(sel, off uint16, v uint16) error
 }
 
+// SelectorInfo 是 Bus 可以額外提供的 selector 資訊。
+//
+// 286 的 `VERR`／`VERW`／`LSL` 只需要知道「這個 selector 有沒有配置、
+// 它的界限是多少」——在 selector 就是 handle 的模型下（spec 001 §3），
+// 這兩個問題都有明確答案，不必真的做 descriptor。
+type SelectorInfo interface {
+	// SelectorLimit 回傳最後一個合法位移；ok 為 false 表示沒有這個 selector。
+	SelectorLimit(sel uint16) (limit uint32, ok bool)
+}
+
 // Size 是運算元位寬，單位是 byte。
 type Size int
 

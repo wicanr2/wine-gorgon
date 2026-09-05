@@ -440,3 +440,43 @@ func Test32BitDivide(t *testing.T) {
 		t.Errorf("EAX=%d EDX=%d，預期 142857 餘 1", c.R[AX], c.R[DX])
 	}
 }
+
+// VERR／LSL 在 selector 就是 handle 的模型下只是查表。
+func Test286SelectorInstructions(t *testing.T) {
+	bus := newBus()
+	// verr ax（0F 00 E0）／verr bx／lsl cx, ax（0F 03 C8）
+	copy(bus.seg[tCS], []byte{0x0F, 0x00, 0xE0, 0x0F, 0x00, 0xE3, 0x0F, 0x03, 0xC8})
+	c := New(bus)
+	c.Seg[CS], c.Seg[SS] = tCS, tSS
+	c.SetR16(SP, 0x1000)
+	c.SetR16(AX, tDS)
+	c.SetR16(BX, 0x1234) // 沒配置
+
+	if err := c.Step(); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Flag(FlagZF) {
+		t.Error("有效 selector 的 VERR 應該設 ZF")
+	}
+	if err := c.Step(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Flag(FlagZF) {
+		t.Error("無效 selector 的 VERR 應該清 ZF")
+	}
+	if err := c.Step(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.R16(CX); got != 0xFFFF {
+		t.Errorf("LSL 取到界限 %04X，預期 FFFF（64 KiB 段）", got)
+	}
+}
+
+// SelectorLimit 由 flatBus 提供，讓上面那支測試不必牽扯 win16。
+func (b *flatBus) SelectorLimit(sel uint16) (uint32, bool) {
+	m, ok := b.seg[sel]
+	if !ok {
+		return 0, false
+	}
+	return uint32(len(m)) - 1, true
+}

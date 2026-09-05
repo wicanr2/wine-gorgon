@@ -789,6 +789,44 @@ func (c *CPU) exec0F(ip uint16) error {
 		return c.wrap(ip, c.writeOp(m.rm, v, S8), "寫回")
 	}
 	switch op {
+	case 0x00: // 群組 6：SLDT／STR／LLDT／LTR／VERR／VERW
+		m, err := c.decodeModRM()
+		if err != nil {
+			return c.wrap(ip, err, "ModRM")
+		}
+		if m.reg != 4 && m.reg != 5 {
+			return c.errf(ip, "未實作的 0F 00 /%d（LLDT／LTR 一族是系統指令）", m.reg)
+		}
+		// VERR／VERW：selector 可讀（可寫）就設 ZF。Borland 用它檢查
+		// far 指標有沒有效，檢查不過就走錯誤分支。
+		sel, err := c.readOp(m.rm, S16)
+		if err != nil {
+			return c.wrap(ip, err, "讀 selector")
+		}
+		ok := false
+		if si, has := c.Bus.(SelectorInfo); has {
+			_, ok = si.SelectorLimit(uint16(sel))
+		}
+		c.SetFlag(FlagZF, ok)
+		return nil
+	case 0x03: // LSL：載入段界限
+		m, err := c.decodeModRM()
+		if err != nil {
+			return c.wrap(ip, err, "ModRM")
+		}
+		sel, err := c.readOp(m.rm, S16)
+		if err != nil {
+			return c.wrap(ip, err, "讀 selector")
+		}
+		limit, ok := uint32(0), false
+		if si, has := c.Bus.(SelectorInfo); has {
+			limit, ok = si.SelectorLimit(uint16(sel))
+		}
+		c.SetFlag(FlagZF, ok)
+		if ok {
+			c.setReg(m.reg, limit, c.opSize)
+		}
+		return nil
 	case 0xA4, 0xA5, 0xAC, 0xAD: // SHLD／SHRD
 		// 雙精度位移：把另一個暫存器的位元從另一端「推進來」。
 		// Borland 用它做 32 位元以上的移位。

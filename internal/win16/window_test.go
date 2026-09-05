@@ -177,3 +177,22 @@ func TestSelectorAllocatorReportsExhaustion(t *testing.T) {
 		t.Errorf("只配得出 %d 個 selector，太少", n)
 	}
 }
+
+// GWW_ID 對子視窗要回控制項編號。CreateWindow 的 hMenu 對子視窗是編號、
+// 對頂層視窗是選單 handle；讀的時候不分開的話，控制項送出的 WM_COMMAND
+// 會帶 wParam=0，父視窗分不出是哪一個按鈕被按了。
+func TestGetWindowWordIDSplitsChildAndMenu(t *testing.T) {
+	p := newTestProcess()
+	child := &Window{Handle: 0x0800, Style: WSChild, CtrlID: 501}
+	top := &Window{Handle: 0x0801, Menu: 0x0300}
+	p.Windows[child.Handle] = child
+	p.Windows[top.Handle] = top
+
+	const gwwID = -12
+	if got, _ := p.windowWord(child.Handle, gwwID, nil); got != 501 {
+		t.Errorf("子視窗的 GWW_ID = %d，預期 501", got)
+	}
+	if got, _ := p.windowWord(top.Handle, gwwID, nil); got != 0x0300 {
+		t.Errorf("頂層視窗的 GWW_ID = %04X，預期 0300", got)
+	}
+}

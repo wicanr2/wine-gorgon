@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/wicanr2/wine-gorgon/internal/cpu"
 	"github.com/wicanr2/wine-gorgon/internal/ne"
@@ -25,6 +27,9 @@ func main() {
 	data := flag.String("data", "", "原版資料目錄（唯讀掛成 C:\\CIV）")
 	write := flag.String("write", "", "可寫目錄；不給就一律不准寫")
 	shot := flag.String("shot", "", "結束時把整個畫面存成 PNG")
+	screen := flag.String("screen", "640x480", "螢幕尺寸，例如 800x600")
+	collapse := flag.Bool("collapse-palette", false, "把和靜態色相同的調色盤項收攏（原版量到的是不收攏）")
+	openPath := flag.String("open", "", "檔案對話框要回傳的 DOS 路徑；空的表示使用者按取消")
 	script := flag.String("script", "", "腳本檔：run／click／key／shot（見 cmd/nerun/script.go）")
 	around := flag.String("around", "", "印出第一次呼叫這支 API 前後的紀錄（例：GDI.BITBLT）")
 	flag.Parse()
@@ -33,13 +38,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *script, *around); err != nil {
+	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *script, *around, *screen, *openPath, *collapse); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, steps uint64, traceN int, stub bool, data, write, shot, script, around string) error {
+func run(path string, steps uint64, traceN int, stub bool, data, write, shot, script, around, screen, openPath string, collapse bool) error {
 	img, err := ne.Open(path)
 	if err != nil {
 		return err
@@ -48,10 +53,16 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 	if err != nil {
 		return err
 	}
-	p, err := win16.NewProcess(mod)
+	sw, sh, err := parseSize(screen)
 	if err != nil {
 		return err
 	}
+	p, err := win16.NewProcessSized(mod, sw, sh)
+	if err != nil {
+		return err
+	}
+	p.FileDialogPath = openPath
+	p.CollapsePalette = collapse
 
 	win16.RegisterAll(p)
 	if data != "" {
@@ -227,6 +238,23 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 		}
 		fmt.Println()
 	}
+	{
+		nonBlack := 0
+		for i, e := range p.SysPalette {
+			if i >= 10 && i < 246 && (e.R|e.G|e.B) != 0 {
+				nonBlack++
+			}
+		}
+		fmt.Printf("調色盤：邏輯→實體對應 %d 格，非靜態區有顏色的 %d／236\n",
+			len(p.PalMap), nonBlack)
+	}
+	if len(p.BitmapKinds) > 0 {
+		fmt.Print("CreateBitmap 的 (平面,bpp)：")
+		for k, n := range p.BitmapKinds {
+			fmt.Printf("(%d,%d)×%d ", k[0], k[1], n)
+		}
+		fmt.Println()
+	}
 	if len(p.Sounds) > 0 {
 		fmt.Printf("音效：%v\n", p.Sounds)
 	}
@@ -254,4 +282,17 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 	fmt.Printf("         CS=%04X IP=%04X DS=%04X ES=%04X SS=%04X FLAGS=%04X\n",
 		c.Seg[cpu.CS], c.IP, c.Seg[cpu.DS], c.Seg[cpu.ES], c.Seg[cpu.SS], c.Flags)
 	return nil
+}
+
+func parseSize(s string) (int, int, error) {
+	i := strings.IndexAny(s, "xX*")
+	if i < 0 {
+		return 0, 0, fmt.Errorf("螢幕尺寸要寫成 寬x高，例如 800x600")
+	}
+	w, err := strconv.Atoi(s[:i])
+	if err != nil {
+		return 0, 0, err
+	}
+	h, err := strconv.Atoi(s[i+1:])
+	return w, h, err
 }

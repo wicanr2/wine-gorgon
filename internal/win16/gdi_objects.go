@@ -115,7 +115,15 @@ type Font struct {
 }
 
 // Palette 是一份邏輯調色盤。
-type Palette struct{ Entries []RGB }
+//
+// `Map` 是 RealizePalette 之後「邏輯索引 → 實體索引」的對應，存在調色盤
+// 自己身上而不是行程上——同時存在多份邏輯調色盤時，AnimatePalette 動的
+// 必須是**它自己那一份**的實體格子。
+type Palette struct {
+	Entries []RGB
+	Flags   []uint8
+	Map     []byte
+}
 
 // Object 是 handle 表裡的一格。
 type Object struct {

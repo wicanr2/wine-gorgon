@@ -98,6 +98,10 @@ type Process struct {
 	cursorHandle     uint16
 	iconHandle       uint16
 
+	// CollapsePalette 打開才會把和靜態色相同的邏輯項收攏到靜態格。
+	// **預設關閉**——原版量到的是不收攏（見 palette.go）。
+	CollapsePalette bool
+
 	// PalMap 是「邏輯調色盤索引 → 實體調色盤索引」的對應，
 	// 由 RealizePalette 建立。
 	PalMap []byte
@@ -109,6 +113,9 @@ type Process struct {
 	Blits      int
 	BlitsBadDC int
 	stock      map[uint16]uint16
+
+	// BitmapKinds 統計 CreateBitmap 用過哪些 (平面, bpp) 組合。
+	BitmapKinds map[[2]uint8]int
 
 	// Quit 是收到 PostQuitMessage 之後的狀態。
 	Quit     bool
@@ -145,6 +152,10 @@ type Process struct {
 	// Fonts 是載入的點陣字面，順序就是檔案裡的順序——`EnumFonts` 的
 	// 列舉順序也是這個（civ1 `docs/re/319` 靠它認出 CIVTIMES18 是第 17 個）。
 	Fonts []*BitmapFont
+
+	// FileDialogPath 是檔案對話框「使用者選了什麼」。空字串 ＝ 取消。
+	FileDialogPath  string
+	FileDialogCalls []string
 
 	// Sounds 記下播過的音效檔名。
 	Sounds []string
@@ -233,7 +244,15 @@ func (e *UnhandledAPIError) Error() string {
 // 初始狀態的來源全部是檔頭：CS:IP 與 SS:SP 直接取 `ne_csip`／`ne_sssp`，
 // DS 取自動資料段。`ne_sssp` 的兩種特例（段號 0、SP 0）照 Windows 載入器
 // 的規則補：段號 0 表示堆疊就在 DGROUP 裡，SP 0 表示指到那塊的尾巴。
-func NewProcess(mod *Module) (*Process, error) {
+// NewProcess 用預設的 640×480 螢幕建立行程。
+func NewProcess(mod *Module) (*Process, error) { return NewProcessSized(mod, 640, 480) }
+
+// NewProcessSized 指定螢幕尺寸建立行程。
+//
+// 螢幕尺寸不是裝飾：它決定 `GetSystemMetrics(SM_CXSCREEN)`、視窗置中的
+// 結果、以及地圖客戶區有多大。要和某一份 oracle 幀逐點比對，就得先用
+// 那一份 oracle 當時的解析度（civ1 的參考幀是 Windows 3.1 800×600）。
+func NewProcessSized(mod *Module, screenW, screenH int) (*Process, error) {
 	p := &Process{Mod: mod, Handlers: map[string]Handler{}, RawHandlers: map[string]RawHandler{}, TraceLimit: 100000}
 	c := cpu.New(mod.Mem)
 	p.CPU = c
@@ -299,10 +318,11 @@ func NewProcess(mod *Module) (*Process, error) {
 
 	p.CurrentDrive, p.CurrentDir = 2, `CIV`
 	p.FS = NewFileSystem("", "CIV")
-	p.ScreenW, p.ScreenH = 640, 480
+	p.ScreenW, p.ScreenH = screenW, screenH
 	p.Screen = NewSurface(p.ScreenW, p.ScreenH)
 	p.Metrics = defaultMetrics(p.ScreenW, p.ScreenH)
 	p.initPalette()
+	p.BitmapKinds = map[[2]uint8]int{}
 	p.Objects = NewObjects()
 	p.Classes = map[string]*Class{}
 	p.Windows = map[uint16]*Window{}

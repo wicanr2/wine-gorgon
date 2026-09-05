@@ -253,6 +253,18 @@ func (m *Memory) Walk(sel, off uint16, n int, fn func(part []byte) bool) int {
 	return done
 }
 
+// SelectorLimit 實作 cpu.SelectorInfo：回傳最後一個合法位移。
+//
+// 界限用「進位到 32 個 byte 之後的大小減一」——和 Win16 全域堆積的
+// 配置粒度一致（見 loader.go 的段配置）。
+func (m *Memory) SelectorLimit(sel uint16) (uint32, bool) {
+	b, ok := m.blocks[sel]
+	if !ok {
+		return 0, false
+	}
+	return uint32(len(b.Data)) - 1, true
+}
+
 // Free 拿掉一個 selector。已經釋放的 selector 再讀寫會回
 // SelInvalidError——這是刻意的：懸空指標要在第一次使用時就炸，
 // 不能安靜地讀到舊內容。
