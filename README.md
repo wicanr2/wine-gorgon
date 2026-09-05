@@ -87,7 +87,8 @@ civ1 這個案例還有一個結構上的便宜：它自己帶一套繪圖函式
 | | 里程碑 | 狀態 |
 |---|---|---|
 | M0 | NE 載入器：段、重定位、匯入、進入點 | **完成**。對 CIV.EXE 的數字與獨立的 Python 解析器逐項吻合 |
-| M1 | 16 位元 CPU 核心 ＋ selector 定址 ＋ API thunk 攔截 | 未開始 |
+| M1a | 位址空間：段配置、重定位、API thunk | **完成**。CIV.EXE 133 段 577 KiB、20,124 筆重定位、157 個 thunk |
+| M1b | 16 位元 CPU 核心 ＋ selector 定址 | 進行中 |
 | M2 | KERNEL：`Global*`、檔案、資源 | 未開始 |
 | M3 | USER 訊息迴圈骨架 ＋ GDI DIB／BitBlt | 未開始 |
 | M4 | **主地圖第一幀與原版 oracle PNG 逐點相同** | 未開始 |

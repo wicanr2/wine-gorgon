@@ -254,7 +254,7 @@ func Parse(raw []byte) (*Image, error) {
 					s.Relocs = append(s.Relocs, rec)
 
 					if rec.Kind == RelImportOrd || rec.Kind == RelImportName {
-						imp, e := img.importOf(rec)
+						imp, e := img.ImportForReloc(rec)
 						if e != nil {
 							return nil, e
 						}
@@ -275,7 +275,11 @@ func Parse(raw []byte) (*Image, error) {
 	return img, nil
 }
 
-func (img *Image) importOf(r Reloc) (Import, error) {
+// ImportForReloc 回答「這一筆重定位指向哪一個匯入項」。
+//
+// 載入器需要這個來把重定位目標換成 thunk；解析器自己也用它去彙總相異匯入。
+// 同一份資料兩個消費端，所以放在這裡而不是各自再解一次名稱表。
+func (img *Image) ImportForReloc(r Reloc) (Import, error) {
 	if int(r.Module) < 1 || int(r.Module) > len(img.ModuleNames) {
 		return Import{}, errf("模組參考 %d 超出範圍（共 %d 個）", r.Module, len(img.ModuleNames))
 	}
