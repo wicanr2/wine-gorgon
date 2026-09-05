@@ -1,0 +1,7 @@
+waitfor Load a Saved Game
+clickwin Load a Saved Game
+run 5000000
+clickwin OK
+run 400000000
+hist 265,250,80,80
+shot /out/L3.png

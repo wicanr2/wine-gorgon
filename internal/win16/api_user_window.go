@@ -29,8 +29,14 @@ func RegisterUserWindow(p *Process) {
 			Background: u16(16),
 		}
 		cls.ProcSel, cls.ProcOff = far(2)
-		if s, o := far(18); s != 0 || o != 0 {
+		// lpszMenuName 可以是字串，也可以是 MAKEINTRESOURCE(n)——
+		// 後者是 selector 為 0、位移就是編號的假指標。只認字串的話，
+		// 有選單的視窗會被算成沒有選單，客戶區往上多 SM_CYMENU 個像素，
+		// 而畫面上只是「整張圖往上移了 19 列」。
+		if s, o := far(18); s != 0 {
 			cls.MenuName = p.CString(s, o)
+		} else if o != 0 {
+			cls.MenuName = fmt.Sprintf("#%d", o)
 		}
 		cls.Extra = make([]byte, cls.ClsExtra)
 		p.Classes[upper(cls.Name)] = cls
@@ -129,6 +135,13 @@ func RegisterUserWindow(p *Process) {
 			return 0, nil
 		}
 		p.Mod.Mem.Free(cs.Sel)
+
+		// 建好之後要送 WM_MOVE 與 WM_SIZE。**不送的話，靠 WM_SIZE 設定
+		// 自己繪圖區大小的程式會一直用預設值**——CIV.EXE 的地圖就是這樣：
+		// 內容畫得完全正確，但整塊沒有在客戶區裡置中。
+		if err := p.sendMoveSize(w); err != nil {
+			return 0, err
+		}
 
 		if style&WSVisible != 0 {
 			if err := p.showWindow(w, 5); err != nil {
@@ -426,6 +439,9 @@ func RegisterUserWindow(p *Process) {
 		w.X, w.Y = int(int16(a.Word(2))), int(int16(a.Word(4)))
 		w.W, w.H = int(int16(a.Word(6))), int(int16(a.Word(8)))
 		p.layout(w)
+		if err := p.sendMoveSize(w); err != nil {
+			return 0, err
+		}
 		if a.Word(10) != 0 {
 			p.Invalidate(w, nil, true)
 		}
@@ -576,6 +592,21 @@ func RegisterUserWindow(p *Process) {
 		return 0, nil
 	}
 	h["USER.#223"] = func(p *Process, _ Args) (uint32, error) { return 0, nil } // SetKeyboardState
+}
+
+// sendMoveSize 送 WM_MOVE 與 WM_SIZE。
+//
+// lParam 的高位字是縱向、低位字是橫向；WM_MOVE 給的是**客戶區左上角**
+// 的位置，WM_SIZE 給的是**客戶區大小**。
+func (p *Process) sendMoveSize(w *Window) error {
+	const sizeRestored = 0
+	if _, err := p.SendMessage(w.Handle, WMMove, 0,
+		uint32(uint16(int16(w.ClientY)))<<16|uint32(uint16(int16(w.ClientX)))); err != nil {
+		return err
+	}
+	_, err := p.SendMessage(w.Handle, WMSize, sizeRestored,
+		uint32(uint16(w.ClientH))<<16|uint32(uint16(w.ClientW)))
+	return err
 }
 
 // destroyWindow 銷毀一個視窗**和它所有的子視窗**。

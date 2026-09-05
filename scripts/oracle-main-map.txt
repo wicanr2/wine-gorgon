@@ -1,0 +1,11 @@
+# 走到主地圖第一幀：載入 civ1 專案的 NEWUNIT.SAV。
+#
+# 用存檔而不是重跑開局——世界是亂數生成的，重跑不會得到同一個世界。
+# 用 waitfor／clickwin 而不是固定步數與座標——同一個畫面在不同輸入下
+# 要跑的指令數差好幾倍，而版面會隨字型度量改變。
+waitfor Load a Saved Game
+clickwin Load a Saved Game
+run 5000000
+clickwin OK
+run 400000000
+shot ours.png
