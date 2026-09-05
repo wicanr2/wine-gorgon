@@ -28,16 +28,16 @@ func TestChildFollowsParent(t *testing.T) {
 	p.Windows[child.Handle] = child
 	p.layout(parent)
 
-	wantX := 100 + 3 + 10 // 視窗 x ＋ 對話框邊框 ＋ 子視窗相對 x
-	wantY := 50 + 3 + 19 + 20
+	wantX := 100 + 4 + 10 // 視窗 x ＋ 邊框（SM_CXFRAME）＋ 子視窗相對 x
+	wantY := 50 + 4 + 19 + 20
 	if child.AbsX != wantX || child.AbsY != wantY {
 		t.Fatalf("子視窗在 (%d,%d)，預期 (%d,%d)", child.AbsX, child.AbsY, wantX, wantY)
 	}
 
 	parent.X, parent.Y = 0, 0
 	p.layout(parent)
-	if child.AbsX != 13 || child.AbsY != 42 {
-		t.Errorf("父視窗移動後子視窗在 (%d,%d)，預期 (13,42)", child.AbsX, child.AbsY)
+	if child.AbsX != 14 || child.AbsY != 43 {
+		t.Errorf("父視窗移動後子視窗在 (%d,%d)，預期 (14,43)", child.AbsX, child.AbsY)
 	}
 	if child.X != 10 || child.Y != 20 {
 		t.Errorf("子視窗的相對座標被改動了：(%d,%d)", child.X, child.Y)
@@ -211,11 +211,16 @@ func TestMainWindowClientMatchesOracle(t *testing.T) {
 	}
 	p.Windows[w.Handle] = w
 	p.layout(w)
-	if w.ClientX != 171 || w.ClientY != 41 {
-		t.Errorf("客戶區原點 (%d,%d)，預期 (171,41)", w.ClientX, w.ClientY)
+	// (172,42) 是**內容原點**，不是「量到的黑區左上角」。參考幀上黑區
+	// 從 (171,41) 起，但那一列與那一行是主窗框最後一道黑線——框是黑的、
+	// 未揭露的地圖格也是黑的，量的時候分不出來（civ1 DS327 §3）。
+	// 608 ＝ 19 格 × 32，與遊戲自己算的視窗寬（608 ＋ 2×4 ＋ 16 捲軸
+	// ＝ 632）閉合。
+	if w.ClientX != 172 || w.ClientY != 42 {
+		t.Errorf("客戶區原點 (%d,%d)，預期 (172,42)", w.ClientX, w.ClientY)
 	}
-	if w.ClientW != 610 || w.ClientH != 540 {
-		t.Errorf("客戶區大小 %dx%d，預期 610x540", w.ClientW, w.ClientH)
+	if w.ClientW != 608 || w.ClientH != 538 {
+		t.Errorf("客戶區大小 %dx%d，預期 608x538", w.ClientW, w.ClientH)
 	}
 }
 
