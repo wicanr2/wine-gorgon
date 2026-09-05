@@ -19,19 +19,20 @@ func main() {
 	aRect := flag.String("a-rect", "", "第一張圖的矩形 x,y,w,h（預設整張）")
 	bRect := flag.String("b-rect", "", "第二張圖的矩形 x,y,w,h（預設整張）")
 	out := flag.String("out", "", "把差異寫成 PNG（相同的像素變暗，不同的塗紅）")
+	ignore := flag.String("ignore", "", "忽略的矩形（比對座標系，x,y,w,h；多個用分號隔開）")
 	limit := flag.Int("list", 10, "列出前幾個不同的像素")
 	flag.Parse()
 	if flag.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "用法：nediff [選項] <A.png> <B.png>")
 		os.Exit(2)
 	}
-	if err := run(flag.Arg(0), flag.Arg(1), *aRect, *bRect, *out, *limit); err != nil {
+	if err := run(flag.Arg(0), flag.Arg(1), *aRect, *bRect, *out, *ignore, *limit); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(pathA, pathB, rectA, rectB, out string, listN int) error {
+func run(pathA, pathB, rectA, rectB, out, ignore string, listN int) error {
 	a, err := load(pathA)
 	if err != nil {
 		return err
@@ -53,15 +54,33 @@ func run(pathA, pathB, rectA, rectB, out string, listN int) error {
 			ra.Dx(), ra.Dy(), rb.Dx(), rb.Dy())
 	}
 
+	// 忽略區：參考幀上有滑鼠游標這種「不是遊戲畫的」東西。把它們列出來
+	// 比放寬容差誠實——被忽略的是**指名的矩形**，不是「差不多就算過」。
+	var skips []image.Rectangle
+	if ignore != "" {
+		for _, part := range strings.Split(ignore, ";") {
+			r, err := parseRect(strings.TrimSpace(part), image.Rectangle{})
+			if err != nil {
+				return fmt.Errorf("-ignore：%w", err)
+			}
+			skips = append(skips, r)
+		}
+	}
+
 	w, h := ra.Dx(), ra.Dy()
 	diff := image.NewRGBA(image.Rect(0, 0, w, h))
-	bad := 0
+	bad, skipped := 0, 0
 	listed := 0
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			r1, g1, b1, _ := a.At(ra.Min.X+x, ra.Min.Y+y).RGBA()
 			r2, g2, b2, _ := b.At(rb.Min.X+x, rb.Min.Y+y).RGBA()
 			same := r1 == r2 && g1 == g2 && b1 == b2
+			if !same && inAny(skips, x, y) {
+				skipped++
+				diff.Set(x, y, color.RGBA{0, 0, 120, 255})
+				continue
+			}
 			if same {
 				diff.Set(x, y, color.RGBA{uint8(r1 >> 10), uint8(g1 >> 10), uint8(b1 >> 10), 255})
 				continue
@@ -78,6 +97,9 @@ func run(pathA, pathB, rectA, rectB, out string, listN int) error {
 	total := w * h
 	fmt.Printf("比對 %dx%d ＝ %d 個像素：不同 %d（%.4f%%）\n",
 		w, h, total, bad, 100*float64(bad)/float64(total))
+	if skipped > 0 {
+		fmt.Printf("忽略區內另有 %d 個像素不同\n", skipped)
+	}
 	if bad == 0 {
 		fmt.Println("逐點相同")
 	}
@@ -96,6 +118,15 @@ func run(pathA, pathB, rectA, rectB, out string, listN int) error {
 		os.Exit(1)
 	}
 	return nil
+}
+
+func inAny(rs []image.Rectangle, x, y int) bool {
+	for _, r := range rs {
+		if x >= r.Min.X && x < r.Max.X && y >= r.Min.Y && y < r.Max.Y {
+			return true
+		}
+	}
+	return false
 }
 
 func load(path string) (image.Image, error) {
