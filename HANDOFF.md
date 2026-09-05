@@ -2,46 +2,41 @@
 
 ## 現在跑得到哪裡
 
+**主地圖畫得出來，而且和原版逐點相同。**
+
 ```sh
-docker run --rm --network none --memory 2g --cpus 2 \
-  -e GOPATH=/tmp/gp -e GOCACHE=/tmp/gc -e GOPROXY=off -e GOFLAGS=-buildvcs=false \
-  --user "$(id -u):$(id -g)" \
-  -v "$PWD:/src" -v /path/to/CIV:/game:ro -v "$PWD/workplace/out:/out" \
-  -w /src dsds-go:1.25 \
-  sh -c 'export PATH=/usr/local/go/bin:$PATH; go run ./cmd/nerun -data /game -script /out/play.txt /game/CIV.EXE'
+docker run --rm --network none --memory 2g --cpus 2 --user "$(id -u):$(id -g)" \
+  -v /path/to/CIV:/game:ro -v "$PWD/workplace/write:/gw" -v "$PWD/workplace/out:/out" \
+  -w /out dsds-go:1.25 \
+  ./nerun -data /game -write /gw -screen 800x600 \
+          -open 'C:\CIV\NEWUNIT.SAV' -script oracle-main-map.txt /game/CIV.EXE
 ```
 
-腳本 `play.txt`：
+（`NEWUNIT.SAV` 要先放進可寫目錄；它來自 civ1 專案的
+`workplace/test-output/win31-new-game-unit-v1/`。腳本在 `scripts/`。）
+
+比對：
 
 ```
-run 60000000
-click 250,280      # Start a New Game
-run 3000000
-click 405,369      # OK
-run 60000000
-shot /out/p2.png
+$ nediff -a-rect 172,42,440,538 -b-rect 340,42,440,538 ours.png oracle.png
+比對 440x538 ＝ 236720 個像素：不同 54（0.0228%）
 ```
 
-跑到主選單，六個項目以原版 `CIVFONTS.FON` 的哥德體畫出來，可以點。
-點完 `Start a New Game` ＋ `OK` 之後遊戲把那六個選項的視窗銷毀了
-（`WM_DESTROY` ×6，所以那一步有被處理），但**沒有出現下一個對話框**，
-之後就停在自己的訊息迴圈裡空轉。
+那 54 個是參考幀上的滑鼠游標（Windows 畫的，不是遊戲畫的）。
 
 ## 下一步（照這個順序）
 
-1. **查清楚「按下 OK 之後為什麼沒有下一個畫面」。**
-   已知：訊息迴圈還在跑（`PeekMessage` 每幾十條指令一次），熱點在
-   `00A7:02F3`（`PeekMessage` 的呼叫點）與 `01F7:030E`。已排除的：
-   不是當機、不是未實作的 API（`nerun` 會報）、不是步數不夠（多跑 6,000 萬
-   條沒有變化）。**下一步該做的是把 OK 之後的訊息序列印出來**，
-   看遊戲在等哪一則。`Process.MsgCount` 已經有計數，缺的是逐則的紀錄。
-2. **視窗銷毀後要重畫下面的東西。** 目前銷毀不會讓任何人重畫，
-   螢幕上會留著已經不存在的視窗的像素。這在對拍時是致命的。
-3. **`GetSystemMetrics` 的邊框尺寸逐項核對**（`docs/spec/004` §6）。
-   目前是 Windows 3.1 VGA 的常見值，**沒有對原版量過**，而它們決定
-   客戶區大小，也就決定地圖從哪一個像素開始畫。
-4. **`Polygon` 的填色**（目前只畫外框）。
-5. 走到主地圖之後才談 M4 的逐點比對。
+1. **橫向落點還差 168 個像素**（`docs/spec/006` §4）。內容完全相同，
+   只是整塊往左偏。已排除：`WM_SIZE` 沒送、客戶區算錯、選單高度。
+   遊戲拿到的 `GetClientRect(CIV)` 是 608×538（和參考幀一致），但地圖
+   內容左緣落在客戶區內第 88 個像素，像是它以為客戶區只有 272 寬。
+   **下一步是把地圖第一次繪製之前所有「量尺寸」類 API 的回傳值連同
+   呼叫端位址印出來**，對照 civ1 `docs/re/322` 的邏輯→螢幕換算。
+2. **非客戶區沒有畫**：標題列、選單列、捲軸都是空的。要和參考幀比整個
+   畫面就得補上，而那要先有 Windows 3.1 的框線規則與系統字型。
+3. `Polygon` 的填色（目前只畫外框）。
+4. 走「開新遊戲」那條路時世界是亂數生成的，**不能拿來對拍**；對拍一律
+   從存檔進去。
 
 ## 診斷工具（先用這些，不要先猜）
 

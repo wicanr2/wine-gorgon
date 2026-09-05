@@ -404,6 +404,8 @@ func RegisterUserWindow(p *Process) {
 			return 0, nil
 		}
 		sel, off := a.Ptr(2)
+		// 客戶區大小決定遊戲把地圖畫在哪裡；記一筆（去重）好對照參考幀。
+		p.note("GetClientRect(%04X %s) → %dx%d", w.Handle, w.ClassName, w.ClientW, w.ClientH)
 		p.writeRect(sel, off, [4]int{0, 0, w.ClientW, w.ClientH})
 		return 1, nil
 	}
