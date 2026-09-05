@@ -5,6 +5,7 @@ import (
 
 	"github.com/wicanr2/wine-gorgon/internal/cpu"
 	"github.com/wicanr2/wine-gorgon/internal/ne"
+	"github.com/wicanr2/wine-gorgon/internal/winapi"
 )
 
 // Process 是「一個載好的模組 ＋ 一顆在上面跑的 CPU」。
@@ -15,19 +16,102 @@ type Process struct {
 	Mod *Module
 	CPU *cpu.CPU
 
-	// Handlers 的鍵是 ne.Import.Key()（`GDI.#45`、`KERNEL.GLOBALALLOC`）。
+	// Handlers 的鍵是 ne.Import.Key()（`GDI.#45`）。
 	Handlers map[string]Handler
+
+	// RawHandlers 給不吃 pascal 慣例的入口用（`WIN87EM.__FPMATH` 靠 BX
+	// 選功能）。它要自己彈堆疊，所以也自己負責 RetFar。
+	RawHandlers map[string]RawHandler
 
 	// Trace 記下每一次 API 呼叫，順序即發生順序。
 	Trace []Call
 
 	// TraceLimit 是 Trace 的上限，避免長跑把記憶體吃光；0 表示不限。
 	TraceLimit int
+
+	// PSP 是那塊放命令列的 selector（`InitTask` 回傳的 ES）。
+	PSP uint16
+
+	// Env 是 DOS 環境區塊的 selector（`GetDOSEnvironment` 回傳的段）。
+	Env uint16
+
+	// ModulePath 是 `GetModuleFileName` 回報的路徑。它會出現在遊戲用來
+	// 找資料檔的字串裡，所以要和實際的資料目錄對得起來。
+	ModulePath string
+
+	// MessageBoxes 記下遊戲彈過的訊息框。沒有畫面的時候，這是它唯一
+	// 會主動說話的管道。
+	MessageBoxes []MessageBoxCall
+
+	// Notes 是「做了但不完整」的清單，去重。它是下一輪的工作清單。
+	Notes     []string
+	seenNotes map[string]bool
+
+	// CurrentDrive／CurrentDir 是行程看到的 DOS 目前位置（0=A、2=C）。
+	CurrentDrive uint8
+	CurrentDir   string
+
+	// ScreenW／ScreenH 是回報給 GetSystemMetrics 的螢幕尺寸。
+	// 原版 Civilization 跑在 640×480；改這個會改變版面計算。
+	ScreenW, ScreenH int
+
+	// Clock 是這個行程看到的時間。預設是 StepClock：跟著指令數走，
+	// 單調而且可重現。
+	Clock Clock
+
+	// FPMathCodes 記下每次 `WIN87EM.__FPMATH` 的 BX 值。這是「先量再寫」
+	// 的欄位：等看到實際用到哪些功能碼，再決定要實作哪些。
+	FPMathCodes []uint16
+
+	// StackLimit 是 `InitTask` 回傳的 CX。**這是假說**：Borland 的啟動碼
+	// 拿它設堆疊探測的下限，取檔頭的 `ne_stack`（位元組數）在語意上合理，
+	// 但沒有對原版量過。如果之後看到堆疊探測誤判，第一個要回頭查的就是它。
+	StackLimit uint16
 }
 
-// Handler 實作一支 API。它拿到的是「呼叫端的回傳位址已經在堆疊上」的狀態，
-// 和真正的被呼叫方一樣；做完事之後要自己呼叫 p.CPU.RetFar(參數位元組數)。
-type Handler func(p *Process, imp ne.Import) error
+// Handler 實作一支 API。
+//
+// 參數由 Args 提供，回傳值是 **DX:AX**（Win16 的 32 位元回傳慣例；只回
+// 16 位元的就讓高位是 0）。要動其他暫存器（`InitTask` 會設 CX／SI／DI／ES）
+// 就直接改 `p.CPU`。
+//
+// **不要自己呼叫 RetFar**：回傳之後由派送端統一用 winapi 表上的參數
+// 位元組數彈掉。把「彈幾個 byte」從處理器裡拿掉，就少掉一整類 bug。
+type Handler func(p *Process, a Args) (uint32, error)
+
+// RawHandler 是不走 pascal 慣例的入口：參數在暫存器裡，回傳前要自己
+// 呼叫 p.CPU.RetFar()。
+type RawHandler func(p *Process, imp ne.Import) error
+
+// Args 讀一次呼叫的參數區。
+//
+// pascal 呼叫慣例由左往右推、堆疊往下長，所以**簽章最左邊**的參數在最高位址。
+// 這裡的 off 一律是「從簽章左邊算起的位元組位移」，和 windows.h 的宣告
+// 逐字對得起來：`BitBlt(HDC, int, int, int, int, HDC, int, int, DWORD)`
+// 的第一個 HDC 是 Word(0)、最後的 DWORD 是 Long(18)。
+type Args struct {
+	p   *Process
+	top uint16 // 第一個參數的**後面**一個位址
+}
+
+// Word 取一個 16 位元參數。
+func (a Args) Word(off int) uint16 {
+	v, _ := a.p.Mod.Mem.ReadU16(a.p.CPU.Seg[cpu.SS], a.top-uint16(off)-2)
+	return v
+}
+
+// Long 取一個 32 位元參數（低位字在低位址）。
+func (a Args) Long(off int) uint32 {
+	lo, _ := a.p.Mod.Mem.ReadU16(a.p.CPU.Seg[cpu.SS], a.top-uint16(off)-4)
+	hi, _ := a.p.Mod.Mem.ReadU16(a.p.CPU.Seg[cpu.SS], a.top-uint16(off)-2)
+	return uint32(hi)<<16 | uint32(lo)
+}
+
+// Ptr 取一個 far 指標，回 (selector, 位移)。
+func (a Args) Ptr(off int) (sel, o uint16) {
+	v := a.Long(off)
+	return uint16(v >> 16), uint16(v)
+}
 
 // Call 是一次 API 呼叫的紀錄。
 type Call struct {
@@ -48,7 +132,7 @@ type UnhandledAPIError struct {
 
 func (e *UnhandledAPIError) Error() string {
 	return fmt.Sprintf("win16: 未實作的 API %s（由 %04X:%04X 呼叫，第 %d 步）",
-		e.Import.Key(), e.Call.FromCS, e.Call.FromIP, e.Call.Steps)
+		winapi.Describe(e.Import.Key()), e.Call.FromCS, e.Call.FromIP, e.Call.Steps)
 }
 
 // NewProcess 建立行程並把暫存器設成 NE 進入點的初始狀態。
@@ -57,7 +141,7 @@ func (e *UnhandledAPIError) Error() string {
 // DS 取自動資料段。`ne_sssp` 的兩種特例（段號 0、SP 0）照 Windows 載入器
 // 的規則補：段號 0 表示堆疊就在 DGROUP 裡，SP 0 表示指到那塊的尾巴。
 func NewProcess(mod *Module) (*Process, error) {
-	p := &Process{Mod: mod, Handlers: map[string]Handler{}, TraceLimit: 100000}
+	p := &Process{Mod: mod, Handlers: map[string]Handler{}, RawHandlers: map[string]RawHandler{}, TraceLimit: 100000}
 	c := cpu.New(mod.Mem)
 	p.CPU = c
 
@@ -90,9 +174,35 @@ func NewProcess(mod *Module) (*Process, error) {
 		}
 		sp = uint16(len(blk.Data)) // 長度剛好 0x10000 時會變成 0，那也正是硬體的行為
 	}
-	c.Seg[cpu.SS], c.R[cpu.SP] = ssSel, sp
+	c.Seg[cpu.SS] = ssSel
+	c.SetR16(cpu.SP, sp)
 
+	// PSP：真 Windows 給每個任務一個 DOS 程式段前綴，命令列在 +0x80
+	// （長度位元組 ＋ 內文 ＋ CR）。這裡只需要「命令列是空的」。
+	psp := mod.Mem.Alloc("PSP", 0x100)
+	psp.Data[0x80] = 0
+	psp.Data[0x81] = 0x0D
+	p.PSP = psp.Sel
+	p.StackLimit = mod.Image.StackSize
+
+	// DOS 環境區塊：一串 `NAME=VALUE\0`、以空字串收尾，接一個計數字，
+	// 再接執行檔完整路徑。Borland 的啟動碼會走完整串找那個路徑。
+	p.ModulePath = `C:\CIV\CIV.EXE`
+	var env []byte
+	env = append(env, []byte("PATH=C:\\\x00")...)
+	env = append(env, 0x00)       // 環境結束
+	env = append(env, 0x01, 0x00) // 後面還有一個字串
+	env = append(env, []byte(p.ModulePath)...)
+	env = append(env, 0x00)
+	envBlk := mod.Mem.Alloc("DOS 環境", len(env)+16)
+	copy(envBlk.Data, env)
+	p.Env = envBlk.Sel
+
+	p.CurrentDrive, p.CurrentDir = 2, `CIV`
+	p.ScreenW, p.ScreenH = 640, 480
+	p.Clock = &StepClock{CPU: c}
 	c.OnFarCall = p.onFarCall
+	c.OnInt = p.onInt
 	return p, nil
 }
 
@@ -108,18 +218,32 @@ func (p *Process) onFarCall(c *cpu.CPU, sel, off uint16) (bool, error) {
 
 	// 呼叫端在堆疊上：far call 剛推入 CS:IP，所以 [SP] 是回傳位移、
 	// [SP+2] 是回傳段。拿它當「誰呼叫的」比記 CPU 現值準確。
-	fromIP, _ := p.Mod.Mem.ReadU16(c.Seg[cpu.SS], c.R[cpu.SP])
-	fromCS, _ := p.Mod.Mem.ReadU16(c.Seg[cpu.SS], c.R[cpu.SP]+2)
+	fromIP, _ := p.Mod.Mem.ReadU16(c.Seg[cpu.SS], c.R16(cpu.SP))
+	fromCS, _ := p.Mod.Mem.ReadU16(c.Seg[cpu.SS], c.R16(cpu.SP)+2)
 	call := Call{Import: imp, Steps: c.Steps, FromCS: fromCS, FromIP: fromIP}
 	if p.TraceLimit == 0 || len(p.Trace) < p.TraceLimit {
 		p.Trace = append(p.Trace, call)
 	}
 
-	h, ok := p.Handlers[imp.Key()]
+	key := imp.Key()
+	if raw, ok := p.RawHandlers[key]; ok {
+		return true, raw(p, imp)
+	}
+	h, ok := p.Handlers[key]
 	if !ok {
 		return true, &UnhandledAPIError{Import: imp, Call: call}
 	}
-	return true, h(p, imp)
+	fn, ok := winapi.Lookup(key)
+	if !ok || fn.ArgBytes < 0 {
+		return true, fmt.Errorf("win16: %s 有處理器，但 winapi 表上沒有可用的參數位元組數", key)
+	}
+	ret, err := h(p, Args{p: p, top: c.R16(cpu.SP) + 4 + uint16(fn.ArgBytes)})
+	if err != nil {
+		return true, err
+	}
+	c.SetR16(cpu.AX, uint16(ret))
+	c.SetR16(cpu.DX, uint16(ret>>16))
+	return true, c.RetFar(uint16(fn.ArgBytes))
 }
 
 // Run 跑到 Halt、錯誤或步數上限。

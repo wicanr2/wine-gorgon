@@ -7,119 +7,78 @@ package cpu
 // 方向由 DF 決定；`si`／`di` 的段別不同：來源可被前綴覆寫，
 // **目的地永遠是 ES**，覆寫不了。這是 x86 少數不對稱的地方。
 
-func (c *CPU) strDelta(w bool) uint16 {
-	d := uint16(1)
-	if w {
-		d = 2
-	}
+func (c *CPU) strDelta(sz Size) uint16 {
+	d := uint16(sz)
 	if c.Flag(FlagDF) {
 		return -d
 	}
 	return d
 }
 
-func (c *CPU) readSrc(w bool) (uint32, error) {
-	seg := c.dataSeg(DS)
-	if w {
-		v, err := c.Bus.ReadU16(seg, c.R[SI])
-		return uint32(v), err
-	}
-	v, err := c.Bus.ReadU8(seg, c.R[SI])
-	return uint32(v), err
-}
+func (c *CPU) acc(sz Size) uint32 { return c.reg(AX, sz) }
 
-func (c *CPU) readDst(w bool) (uint32, error) {
-	if w {
-		v, err := c.Bus.ReadU16(c.Seg[ES], c.R[DI])
-		return uint32(v), err
-	}
-	v, err := c.Bus.ReadU8(c.Seg[ES], c.R[DI])
-	return uint32(v), err
-}
+func (c *CPU) setAcc(v uint32, sz Size) { c.setReg(AX, v, sz) }
 
-func (c *CPU) writeDst(v uint32, w bool) error {
-	if w {
-		return c.Bus.WriteU16(c.Seg[ES], c.R[DI], uint16(v))
-	}
-	return c.Bus.WriteU8(c.Seg[ES], c.R[DI], uint8(v))
-}
-
-func (c *CPU) acc(w bool) uint32 {
-	if w {
-		return uint32(c.R[AX])
-	}
-	return uint32(c.Reg8(0))
-}
-
-func (c *CPU) setAcc(v uint32, w bool) {
-	if w {
-		c.R[AX] = uint16(v)
-		return
-	}
-	c.SetReg8(0, uint8(v))
-}
-
-// stringOp 跑一條字串指令（含 REP）。op 用主 opcode 的低位表示：
+// stringOp 跑一條字串指令（含 REP）。op 用主 opcode 的偶數形表示：
 // 0xA4 movs、0xA6 cmps、0xAA stos、0xAC lods、0xAE scas。
-func (c *CPU) stringOp(op uint8, w bool) error {
+func (c *CPU) stringOp(op uint8, sz Size) error {
 	rep := c.repPrefix
-	d := c.strDelta(w)
+	d := c.strDelta(sz)
+	src := c.dataSeg(DS)
 
 	for {
-		if rep != 0 {
-			if c.R[CX] == 0 {
-				return nil
-			}
+		if rep != 0 && c.R16(CX) == 0 {
+			return nil
 		}
 
 		switch op {
 		case 0xA4: // MOVS
-			v, err := c.readSrc(w)
+			v, err := c.busRead(src, c.R16(SI), sz)
 			if err != nil {
 				return err
 			}
-			if err := c.writeDst(v, w); err != nil {
+			if err := c.busWrite(c.Seg[ES], c.R16(DI), sz, v); err != nil {
 				return err
 			}
-			c.R[SI] += d
-			c.R[DI] += d
+			c.SetR16(SI, c.R16(SI)+d)
+			c.SetR16(DI, c.R16(DI)+d)
 		case 0xA6: // CMPS：比的是 [SI] - [DI]
-			a, err := c.readSrc(w)
+			a, err := c.busRead(src, c.R16(SI), sz)
 			if err != nil {
 				return err
 			}
-			b, err := c.readDst(w)
+			b, err := c.busRead(c.Seg[ES], c.R16(DI), sz)
 			if err != nil {
 				return err
 			}
-			c.sub(a, b, w, 0)
-			c.R[SI] += d
-			c.R[DI] += d
+			c.sub(a, b, sz, 0)
+			c.SetR16(SI, c.R16(SI)+d)
+			c.SetR16(DI, c.R16(DI)+d)
 		case 0xAA: // STOS
-			if err := c.writeDst(c.acc(w), w); err != nil {
+			if err := c.busWrite(c.Seg[ES], c.R16(DI), sz, c.acc(sz)); err != nil {
 				return err
 			}
-			c.R[DI] += d
+			c.SetR16(DI, c.R16(DI)+d)
 		case 0xAC: // LODS
-			v, err := c.readSrc(w)
+			v, err := c.busRead(src, c.R16(SI), sz)
 			if err != nil {
 				return err
 			}
-			c.setAcc(v, w)
-			c.R[SI] += d
-		case 0xAE: // SCAS：比的是 AL/AX - [DI]
-			b, err := c.readDst(w)
+			c.setAcc(v, sz)
+			c.SetR16(SI, c.R16(SI)+d)
+		case 0xAE: // SCAS：比的是 AL/AX/EAX - [DI]
+			b, err := c.busRead(c.Seg[ES], c.R16(DI), sz)
 			if err != nil {
 				return err
 			}
-			c.sub(c.acc(w), b, w, 0)
-			c.R[DI] += d
+			c.sub(c.acc(sz), b, sz, 0)
+			c.SetR16(DI, c.R16(DI)+d)
 		}
 
 		if rep == 0 {
 			return nil
 		}
-		c.R[CX]--
+		c.SetR16(CX, c.R16(CX)-1)
 
 		// REP 對 CMPS／SCAS 才看 ZF；對 MOVS／STOS／LODS，
 		// F2 和 F3 是同一件事（只看 CX）。

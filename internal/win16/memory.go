@@ -127,3 +127,26 @@ func (m *Memory) WriteU16(sel uint16, off uint16, v uint16) error {
 	b.Data[off+1] = uint8(v >> 8)
 	return nil
 }
+
+// Free 拿掉一個 selector。已經釋放的 selector 再讀寫會回
+// SelInvalidError——這是刻意的：懸空指標要在第一次使用時就炸，
+// 不能安靜地讀到舊內容。
+func (m *Memory) Free(sel uint16) bool {
+	if _, ok := m.blocks[sel]; !ok {
+		return false
+	}
+	delete(m.blocks, sel)
+	return true
+}
+
+// Resize 換一塊新的大小，內容照舊（截短或補零），selector 不變。
+func (m *Memory) Resize(sel uint16, size int) bool {
+	b, ok := m.blocks[sel]
+	if !ok {
+		return false
+	}
+	data := make([]byte, size)
+	copy(data, b.Data)
+	b.Data = data
+	return true
+}

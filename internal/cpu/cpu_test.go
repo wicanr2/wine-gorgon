@@ -81,7 +81,7 @@ func run(t *testing.T, code []byte, steps int, setup func(*CPU, *flatBus)) (*CPU
 	copy(bus.seg[tCS], code)
 	c := New(bus)
 	c.Seg[CS], c.Seg[DS], c.Seg[SS], c.Seg[ES] = tCS, tDS, tSS, tES
-	c.R[SP] = 0xFFFE
+	c.SetR16(SP, 0xFFFE)
 	if setup != nil {
 		setup(c, bus)
 	}
@@ -106,7 +106,7 @@ func TestArithmeticAndFlags(t *testing.T) {
 			code:  []byte{0xB8, 0x34, 0x12, 0x05, 0xCC, 0xED},
 			steps: 2,
 			want: func(t *testing.T, c *CPU) {
-				eq16(t, "AX", c.R[AX], 0)
+				eq16(t, "AX", c.R16(AX), 0)
 				flag(t, c, FlagCF, true)
 				flag(t, c, FlagZF, true)
 			},
@@ -128,7 +128,7 @@ func TestArithmeticAndFlags(t *testing.T) {
 			code:  []byte{0xB8, 0x01, 0x80, 0xD1, 0xF8},
 			steps: 2,
 			want: func(t *testing.T, c *CPU) {
-				eq16(t, "AX", c.R[AX], 0xC000)
+				eq16(t, "AX", c.R16(AX), 0xC000)
 				flag(t, c, FlagCF, true)
 			},
 		},
@@ -146,8 +146,8 @@ func TestArithmeticAndFlags(t *testing.T) {
 			code:  []byte{0xB8, 0x2C, 0x01, 0xBB, 0x07, 0x00, 0xF7, 0xE3},
 			steps: 3,
 			want: func(t *testing.T, c *CPU) {
-				eq16(t, "AX", c.R[AX], 2100)
-				eq16(t, "DX", c.R[DX], 0)
+				eq16(t, "AX", c.R16(AX), 2100)
+				eq16(t, "DX", c.R16(DX), 0)
 				flag(t, c, FlagCF, false)
 			},
 		},
@@ -157,8 +157,8 @@ func TestArithmeticAndFlags(t *testing.T) {
 			code:  []byte{0xB8, 0xF6, 0xFF, 0x99, 0xBB, 0x03, 0x00, 0xF7, 0xFB},
 			steps: 4,
 			want: func(t *testing.T, c *CPU) {
-				eq16(t, "AX", c.R[AX], 0xFFFD)
-				eq16(t, "DX", c.R[DX], 0xFFFF)
+				eq16(t, "AX", c.R16(AX), 0xFFFD)
+				eq16(t, "DX", c.R16(DX), 0xFFFF)
 			},
 		},
 		{
@@ -167,8 +167,8 @@ func TestArithmeticAndFlags(t *testing.T) {
 			code:  []byte{0xB9, 0x05, 0x00, 0x31, 0xC0, 0x01, 0xC8, 0xE2, 0xFC},
 			steps: 2 + 5*2,
 			want: func(t *testing.T, c *CPU) {
-				eq16(t, "AX", c.R[AX], 15)
-				eq16(t, "CX", c.R[CX], 0)
+				eq16(t, "AX", c.R16(AX), 15)
+				eq16(t, "CX", c.R16(CX), 0)
 			},
 		},
 		{
@@ -176,7 +176,7 @@ func TestArithmeticAndFlags(t *testing.T) {
 			name:  "0x83 符號延伸",
 			code:  []byte{0xB8, 0x10, 0x00, 0x83, 0xC0, 0xFE},
 			steps: 2,
-			want:  func(t *testing.T, c *CPU) { eq16(t, "AX", c.R[AX], 14) },
+			want:  func(t *testing.T, c *CPU) { eq16(t, "AX", c.R16(AX), 14) },
 		},
 		{
 			// inc 不動 CF：先用 stc 立起來，inc 之後要還在。
@@ -184,7 +184,7 @@ func TestArithmeticAndFlags(t *testing.T) {
 			code:  []byte{0xF9, 0xB8, 0x01, 0x00, 0x40},
 			steps: 3,
 			want: func(t *testing.T, c *CPU) {
-				eq16(t, "AX", c.R[AX], 2)
+				eq16(t, "AX", c.R16(AX), 2)
 				flag(t, c, FlagCF, true)
 			},
 		},
@@ -215,7 +215,7 @@ func TestBPAddressingDefaultsToStack(t *testing.T) {
 func TestSegmentOverride(t *testing.T) {
 	// mov bx, 0x200 / mov es:[bx], ax
 	code := []byte{0xBB, 0x00, 0x02, 0x26, 0x89, 0x07}
-	_, bus := run(t, code, 2, func(c *CPU, _ *flatBus) { c.R[AX] = 0x1234 })
+	_, bus := run(t, code, 2, func(c *CPU, _ *flatBus) { c.SetR16(AX, 0x1234) })
 	if got := le16(bus.seg[tES], 0x200); got != 0x1234 {
 		t.Errorf("ES:0200 = %04X，預期 1234", got)
 	}
@@ -228,7 +228,9 @@ func TestRepMovsw(t *testing.T) {
 	// cld / rep movsw
 	code := []byte{0xFC, 0xF3, 0xA5}
 	c, bus := run(t, code, 2, func(c *CPU, bus *flatBus) {
-		c.R[SI], c.R[DI], c.R[CX] = 0x10, 0x40, 4
+		c.SetR16(SI, 0x10)
+		c.SetR16(DI, 0x40)
+		c.SetR16(CX, 4)
 		for i := 0; i < 8; i++ {
 			bus.seg[tDS][0x10+i] = byte(0xA0 + i)
 		}
@@ -238,20 +240,22 @@ func TestRepMovsw(t *testing.T) {
 			t.Fatalf("ES:%04X = %02X，預期 %02X", 0x40+i, got, 0xA0+i)
 		}
 	}
-	eq16(t, "CX", c.R[CX], 0)
-	eq16(t, "SI", c.R[SI], 0x18)
-	eq16(t, "DI", c.R[DI], 0x48)
+	eq16(t, "CX", c.R16(CX), 0)
+	eq16(t, "SI", c.R16(SI), 0x18)
+	eq16(t, "DI", c.R16(DI), 0x48)
 }
 
 // REPE CMPSB 要在第一個不同的位元組停下，而且 CX 反映的是「還沒比的個數」。
 func TestRepeCmpsbStopsAtDifference(t *testing.T) {
 	code := []byte{0xFC, 0xF3, 0xA6}
 	c, _ := run(t, code, 2, func(c *CPU, bus *flatBus) {
-		c.R[SI], c.R[DI], c.R[CX] = 0, 0, 8
+		c.SetR16(SI, 0)
+		c.SetR16(DI, 0)
+		c.SetR16(CX, 8)
 		copy(bus.seg[tDS], []byte("abcdefgh"))
 		copy(bus.seg[tES], []byte("abcXefgh"))
 	})
-	eq16(t, "CX", c.R[CX], 4)
+	eq16(t, "CX", c.R16(CX), 4)
 	flag(t, c, FlagZF, false)
 }
 
@@ -263,14 +267,14 @@ func TestFarCallHookAndRetFar(t *testing.T) {
 	copy(bus.seg[tCS], code)
 	c := New(bus)
 	c.Seg[CS], c.Seg[DS], c.Seg[SS], c.Seg[ES] = tCS, tDS, tSS, tES
-	c.R[SP] = 0x1000
+	c.SetR16(SP, 0x1000)
 
 	var gotSel, gotOff uint16
 	calls := 0
 	c.OnFarCall = func(c *CPU, sel, off uint16) (bool, error) {
 		calls++
 		gotSel, gotOff = sel, off
-		c.R[AX] = 0x4242
+		c.SetR16(AX, 0x4242)
 		return true, c.RetFar(4) // 假裝是一支吃 4 個位元組參數的 pascal API
 	}
 	if err := c.Step(); err != nil {
@@ -281,12 +285,12 @@ func TestFarCallHookAndRetFar(t *testing.T) {
 	}
 	eq16(t, "CS", c.Seg[CS], tCS)
 	eq16(t, "IP", c.IP, 5)
-	eq16(t, "SP", c.R[SP], 0x1004)
+	eq16(t, "SP", c.R16(SP), 0x1004)
 	if err := c.Step(); err != nil {
 		t.Fatalf("回來之後：%v", err)
 	}
-	eq16(t, "BX", c.R[BX], 0x77)
-	eq16(t, "AX", c.R[AX], 0x4242)
+	eq16(t, "BX", c.R16(BX), 0x77)
+	eq16(t, "AX", c.R16(AX), 0x4242)
 }
 
 // 未實作的 opcode 必須講出位址——不然接一支新程式時最貴的是找位置。
@@ -314,25 +318,25 @@ func TestUnimplementedOpcodeNamesAddress(t *testing.T) {
 func TestEnterLeave(t *testing.T) {
 	// enter 6,0 / leave
 	code := []byte{0xC8, 0x06, 0x00, 0x00, 0xC9}
-	c, _ := run(t, code, 1, func(c *CPU, _ *flatBus) { c.R[BP] = 0xAAAA })
-	eq16(t, "SP", c.R[SP], 0xFFFE-2-6)
-	eq16(t, "BP", c.R[BP], 0xFFFE-2)
+	c, _ := run(t, code, 1, func(c *CPU, _ *flatBus) { c.SetR16(BP, 0xAAAA) })
+	eq16(t, "SP", c.R16(SP), 0xFFFE-2-6)
+	eq16(t, "BP", c.R16(BP), 0xFFFE-2)
 	if err := c.Step(); err != nil {
 		t.Fatalf("leave：%v", err)
 	}
-	eq16(t, "SP", c.R[SP], 0xFFFE)
-	eq16(t, "BP", c.R[BP], 0xAAAA)
+	eq16(t, "SP", c.R16(SP), 0xFFFE)
+	eq16(t, "BP", c.R16(BP), 0xAAAA)
 }
 
 func TestLesLoadsBothHalves(t *testing.T) {
 	// les di, [bx]
 	code := []byte{0xC4, 0x3F}
 	c, _ := run(t, code, 1, func(c *CPU, bus *flatBus) {
-		c.R[BX] = 0x30
+		c.SetR16(BX, 0x30)
 		_ = bus.WriteU16(tDS, 0x30, 0x1234)
 		_ = bus.WriteU16(tDS, 0x32, tES)
 	})
-	eq16(t, "DI", c.R[DI], 0x1234)
+	eq16(t, "DI", c.R16(DI), 0x1234)
 	eq16(t, "ES", c.Seg[ES], tES)
 }
 
@@ -351,3 +355,88 @@ func flag(t *testing.T, c *CPU, f uint16, want bool) {
 }
 
 func le16(m []byte, off int) uint16 { return uint16(m[off]) | uint16(m[off+1])<<8 }
+
+// 386 的 66 前綴：位寬是參數，不是另一套指令表。
+func Test386OperandSizePrefix(t *testing.T) {
+	cases := []struct {
+		name  string
+		code  []byte
+		steps int
+		want  func(*testing.T, *CPU)
+	}{
+		{
+			// push dx / push ax / pop eax：把 DX:AX 併成 EAX。
+			// CIV.EXE 的 000F… 記憶體檢查就是這個寫法。
+			name:  "pop eax 併 DX:AX",
+			code:  []byte{0x52, 0x50, 0x66, 0x58},
+			steps: 3,
+			want: func(t *testing.T, c *CPU) {
+				if c.R[AX] != 0x00401234 {
+					t.Errorf("EAX = %08X，預期 00401234", c.R[AX])
+				}
+			},
+		},
+		{
+			// 寫 16 位元不動高半部——這是 386 的行為，不是疏忽。
+			name:  "寫 AX 保留 EAX 高半部",
+			code:  []byte{0xB8, 0xEF, 0xBE},
+			steps: 1,
+			want: func(t *testing.T, c *CPU) {
+				if c.R[AX] != 0xDEADBEEF {
+					t.Errorf("EAX = %08X，預期 DEADBEEF", c.R[AX])
+				}
+			},
+		},
+		{
+			// cmp dword [0100], 002625A0h：32 位元立即數比較。
+			name:  "32 位元 cmp",
+			code:  []byte{0x66, 0x81, 0x3E, 0x00, 0x01, 0xA0, 0x25, 0x26, 0x00},
+			steps: 1,
+			want: func(t *testing.T, c *CPU) {
+				flag(t, c, FlagCF, true) // 記憶體是 0，比 2,500,000 小
+				flag(t, c, FlagZF, false)
+			},
+		},
+		{
+			name:  "movzx 與 movsx",
+			code:  []byte{0xB0, 0x80, 0x0F, 0xB6, 0xD8, 0x0F, 0xBE, 0xC8},
+			steps: 3,
+			want: func(t *testing.T, c *CPU) {
+				eq16(t, "BX", c.R16(BX), 0x0080)
+				eq16(t, "CX", c.R16(CX), 0xFF80)
+			},
+		},
+		{
+			// 0F AF：雙運算元 IMUL。
+			name:  "imul r16, r/m16",
+			code:  []byte{0xB8, 0x0A, 0x00, 0xBB, 0xF6, 0xFF, 0x0F, 0xAF, 0xC3},
+			steps: 3,
+			want:  func(t *testing.T, c *CPU) { eq16(t, "AX", c.R16(AX), 0xFF9C) }, // -100
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := run(t, tc.code, tc.steps, func(c *CPU, _ *flatBus) {
+				c.R[AX] = 0xDEAD0000
+				c.SetR16(AX, 0x1234)
+				c.SetR16(DX, 0x0040)
+			})
+			tc.want(t, c)
+		})
+	}
+}
+
+// 32 位元除法：EDX:EAX / r/m32。
+func Test32BitDivide(t *testing.T) {
+	// mov eax, 0x000F4240 (1000000) / xor edx,edx / mov ebx, 7 / div ebx
+	code := []byte{
+		0x66, 0xB8, 0x40, 0x42, 0x0F, 0x00,
+		0x66, 0x31, 0xD2,
+		0x66, 0xBB, 0x07, 0x00, 0x00, 0x00,
+		0x66, 0xF7, 0xF3,
+	}
+	c, _ := run(t, code, 4, nil)
+	if c.R[AX] != 142857 || c.R[DX] != 1 {
+		t.Errorf("EAX=%d EDX=%d，預期 142857 餘 1", c.R[AX], c.R[DX])
+	}
+}

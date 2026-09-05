@@ -40,19 +40,19 @@ func (c *CPU) decodeModRM() (modrm, error) {
 	defSeg := DS
 	switch rm {
 	case 0:
-		base = c.R[BX] + c.R[SI]
+		base = c.R16(BX) + c.R16(SI)
 	case 1:
-		base = c.R[BX] + c.R[DI]
+		base = c.R16(BX) + c.R16(DI)
 	case 2:
-		base = c.R[BP] + c.R[SI]
+		base = c.R16(BP) + c.R16(SI)
 		defSeg = SS
 	case 3:
-		base = c.R[BP] + c.R[DI]
+		base = c.R16(BP) + c.R16(DI)
 		defSeg = SS
 	case 4:
-		base = c.R[SI]
+		base = c.R16(SI)
 	case 5:
-		base = c.R[DI]
+		base = c.R16(DI)
 	case 6:
 		if m.mod == 0 {
 			// mod=00 rm=110 是「純 disp16」，不是 [BP]。
@@ -63,10 +63,10 @@ func (c *CPU) decodeModRM() (modrm, error) {
 			m.rm = operand{sel: c.dataSeg(DS), off: d}
 			return m, nil
 		}
-		base = c.R[BP]
+		base = c.R16(BP)
 		defSeg = SS
 	case 7:
-		base = c.R[BX]
+		base = c.R16(BX)
 	}
 
 	switch m.mod {
@@ -89,32 +89,17 @@ func (c *CPU) decodeModRM() (modrm, error) {
 
 // --- 運算元讀寫 ---
 
-func (c *CPU) read8(o operand) (uint8, error) {
+func (c *CPU) readOp(o operand, sz Size) (uint32, error) {
 	if o.isReg {
-		return c.Reg8(o.reg), nil
+		return c.reg(o.reg, sz), nil
 	}
-	return c.Bus.ReadU8(o.sel, o.off)
+	return c.busRead(o.sel, o.off, sz)
 }
 
-func (c *CPU) read16(o operand) (uint16, error) {
+func (c *CPU) writeOp(o operand, v uint32, sz Size) error {
 	if o.isReg {
-		return c.R[o.reg], nil
-	}
-	return c.Bus.ReadU16(o.sel, o.off)
-}
-
-func (c *CPU) write8(o operand, v uint8) error {
-	if o.isReg {
-		c.SetReg8(o.reg, v)
+		c.setReg(o.reg, v, sz)
 		return nil
 	}
-	return c.Bus.WriteU8(o.sel, o.off, v)
-}
-
-func (c *CPU) write16(o operand, v uint16) error {
-	if o.isReg {
-		c.R[o.reg] = v
-		return nil
-	}
-	return c.Bus.WriteU16(o.sel, o.off, v)
+	return c.busWrite(o.sel, o.off, sz, v)
 }

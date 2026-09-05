@@ -4,6 +4,7 @@ package cpu
 func (c *CPU) Step() error {
 	c.segOverride = -1
 	c.repPrefix = 0
+	c.opSize = S16
 	startIP := c.IP
 
 	for {
@@ -24,6 +25,13 @@ func (c *CPU) Step() error {
 		case 0x3E:
 			c.segOverride = DS
 			continue
+		case 0x64, 0x65:
+			return c.errf(startIP, "FS／GS 段覆寫前綴 %02X（386 以上，未實作）", op)
+		case 0x66:
+			c.opSize = S32
+			continue
+		case 0x67:
+			return c.errf(startIP, "位址大小前綴 67（32 位元定址，未實作）")
 		case 0xF0: // LOCK：單執行緒下沒有語意
 			continue
 		case 0xF2, 0xF3:
@@ -65,7 +73,7 @@ func (c *CPU) RetFar(popBytes uint16) error {
 		return err
 	}
 	c.IP, c.Seg[CS] = ip, cs
-	c.R[SP] += popBytes
+	c.SetR16(SP, c.R16(SP)+popBytes)
 	return nil
 }
 
@@ -115,51 +123,59 @@ func (c *CPU) cond(n int) bool {
 	return v
 }
 
+// opSizeFor 依 opcode 的 w 位決定位寬：w=0 一律是 8 位元，
+// w=1 是這條指令的運算元大小（預設 16，有 66 前綴就是 32）。
+func (c *CPU) opSizeFor(op uint8) Size {
+	if op&1 == 0 {
+		return S8
+	}
+	return c.opSize
+}
+
 func (c *CPU) exec(op uint8, ip uint16) error {
 	// --- 0x00..0x3F：八個 ALU 運算 ＋ 段暫存器推入彈出 ---
 	if op < 0x40 {
 		grp := int(op >> 3)
 		switch op & 7 {
 		case 0, 1: // op r/m, r
-			w := op&1 == 1
+			sz := c.opSizeFor(op)
 			m, err := c.decodeModRM()
 			if err != nil {
 				return c.wrap(ip, err, "ModRM")
 			}
-			a, err := c.readW(m.rm, w)
+			a, err := c.readOp(m.rm, sz)
 			if err != nil {
 				return c.wrap(ip, err, "讀運算元")
 			}
-			b := c.regW(m.reg, w)
-			res, store := c.aluOp(grp, a, b, w)
+			res, store := c.aluOp(grp, a, c.reg(m.reg, sz), sz)
 			if store {
-				return c.wrap(ip, c.writeW(m.rm, res, w), "寫回")
+				return c.wrap(ip, c.writeOp(m.rm, res, sz), "寫回")
 			}
 			return nil
 		case 2, 3: // op r, r/m
-			w := op&1 == 1
+			sz := c.opSizeFor(op)
 			m, err := c.decodeModRM()
 			if err != nil {
 				return c.wrap(ip, err, "ModRM")
 			}
-			b, err := c.readW(m.rm, w)
+			b, err := c.readOp(m.rm, sz)
 			if err != nil {
 				return c.wrap(ip, err, "讀運算元")
 			}
-			res, store := c.aluOp(grp, c.regW(m.reg, w), b, w)
+			res, store := c.aluOp(grp, c.reg(m.reg, sz), b, sz)
 			if store {
-				c.setRegW(m.reg, res, w)
+				c.setReg(m.reg, res, sz)
 			}
 			return nil
 		case 4, 5: // op acc, imm
-			w := op&1 == 1
-			imm, err := c.immW(w)
+			sz := c.opSizeFor(op)
+			imm, err := c.fetchImm(sz)
 			if err != nil {
 				return c.wrap(ip, err, "立即數")
 			}
-			res, store := c.aluOp(grp, c.acc(w), imm, w)
+			res, store := c.aluOp(grp, c.acc(sz), imm, sz)
 			if store {
-				c.setAcc(res, w)
+				c.setAcc(res, sz)
 			}
 			return nil
 		case 6: // push sreg（0x0E 是 push cs）
@@ -167,10 +183,9 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 				return c.errf(ip, "未實作的 opcode %02X", op)
 			}
 			return c.wrap(ip, c.push16(c.Seg[grp]), "push 段暫存器")
-		default: // pop sreg；0x0F 在 286 是雙位元組跳脫，不是 pop cs
+		default: // pop sreg；0x0F 在 286 以後是雙位元組跳脫，不是 pop cs
 			if op == 0x0F {
-				nxt, _ := c.Bus.ReadU8(c.Seg[CS], c.IP)
-				return c.errf(ip, "未實作的雙位元組 opcode 0F %02X（286 系統指令？）", nxt)
+				return c.exec0F(ip)
 			}
 			if grp > 3 {
 				return c.errf(ip, "未實作的 opcode %02X", op)
@@ -185,20 +200,22 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 	}
 
 	switch {
-	case op >= 0x40 && op <= 0x47: // INC r16
-		c.R[op-0x40] = uint16(c.inc(uint32(c.R[op-0x40]), true))
+	case op >= 0x40 && op <= 0x47: // INC r
+		i := int(op - 0x40)
+		c.setReg(i, c.inc(c.reg(i, c.opSize), c.opSize), c.opSize)
 		return nil
-	case op >= 0x48 && op <= 0x4F: // DEC r16
-		c.R[op-0x48] = uint16(c.dec(uint32(c.R[op-0x48]), true))
+	case op >= 0x48 && op <= 0x4F: // DEC r
+		i := int(op - 0x48)
+		c.setReg(i, c.dec(c.reg(i, c.opSize), c.opSize), c.opSize)
 		return nil
-	case op >= 0x50 && op <= 0x57: // PUSH r16
-		return c.wrap(ip, c.push16(c.R[op-0x50]), "push")
-	case op >= 0x58 && op <= 0x5F: // POP r16
-		v, err := c.pop16()
+	case op >= 0x50 && op <= 0x57: // PUSH r
+		return c.wrap(ip, c.pushSize(c.reg(int(op-0x50), c.opSize), c.opSize), "push")
+	case op >= 0x58 && op <= 0x5F: // POP r
+		v, err := c.popSize(c.opSize)
 		if err != nil {
 			return c.wrap(ip, err, "pop")
 		}
-		c.R[op-0x58] = v
+		c.setReg(int(op-0x58), v, c.opSize)
 		return nil
 	case op >= 0x70 && op <= 0x7F: // Jcc rel8
 		d, err := c.fetch8()
@@ -209,9 +226,11 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 			c.IP += uint16(int16(int8(d)))
 		}
 		return nil
-	case op >= 0x91 && op <= 0x97: // XCHG AX, r16
+	case op >= 0x91 && op <= 0x97: // XCHG acc, r
 		r := int(op - 0x90)
-		c.R[AX], c.R[r] = c.R[r], c.R[AX]
+		a, b := c.reg(AX, c.opSize), c.reg(r, c.opSize)
+		c.setReg(AX, b, c.opSize)
+		c.setReg(r, a, c.opSize)
 		return nil
 	case op >= 0xB0 && op <= 0xB7: // MOV r8, imm8
 		v, err := c.fetch8()
@@ -220,166 +239,170 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		}
 		c.SetReg8(int(op-0xB0), v)
 		return nil
-	case op >= 0xB8 && op <= 0xBF: // MOV r16, imm16
-		v, err := c.fetch16()
+	case op >= 0xB8 && op <= 0xBF: // MOV r, imm
+		v, err := c.fetchImm(c.opSize)
 		if err != nil {
 			return c.wrap(ip, err, "立即數")
 		}
-		c.R[op-0xB8] = v
+		c.setReg(int(op-0xB8), v, c.opSize)
 		return nil
 	}
 
 	switch op {
-	case 0x60: // PUSHA
-		sp := c.R[SP]
+	case 0x60: // PUSHA／PUSHAD
+		sp := c.reg(SP, c.opSize)
 		for i := 0; i < 8; i++ {
-			v := c.R[i]
+			v := c.reg(i, c.opSize)
 			if i == SP {
 				v = sp
 			}
-			if err := c.push16(v); err != nil {
+			if err := c.pushSize(v, c.opSize); err != nil {
 				return c.wrap(ip, err, "pusha")
 			}
 		}
 		return nil
 	case 0x61: // POPA（SP 那一格丟掉）
 		for i := 7; i >= 0; i-- {
-			v, err := c.pop16()
+			v, err := c.popSize(c.opSize)
 			if err != nil {
 				return c.wrap(ip, err, "popa")
 			}
 			if i != SP {
-				c.R[i] = v
+				c.setReg(i, v, c.opSize)
 			}
 		}
 		return nil
-	case 0x68: // PUSH imm16
-		v, err := c.fetch16()
+	case 0x68: // PUSH imm
+		v, err := c.fetchImm(c.opSize)
 		if err != nil {
 			return c.wrap(ip, err, "立即數")
 		}
-		return c.wrap(ip, c.push16(v), "push")
-	case 0x6A: // PUSH imm8（符號延伸）
+		return c.wrap(ip, c.pushSize(v, c.opSize), "push")
+	case 0x6A: // PUSH imm8（符號延伸到運算元寬度）
 		v, err := c.fetch8()
 		if err != nil {
 			return c.wrap(ip, err, "立即數")
 		}
-		return c.wrap(ip, c.push16(uint16(int16(int8(v)))), "push")
-	case 0x69, 0x6B: // IMUL r16, r/m16, imm
+		return c.wrap(ip, c.pushSize(uint32(int32(int8(v))), c.opSize), "push")
+	case 0x69, 0x6B: // IMUL r, r/m, imm
+		sz := c.opSize
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		src, err := c.read16(m.rm)
+		src, err := c.readOp(m.rm, sz)
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
-		var imm int32
+		var imm int64
 		if op == 0x69 {
-			v, err := c.fetch16()
+			v, err := c.fetchImm(sz)
 			if err != nil {
 				return c.wrap(ip, err, "立即數")
 			}
-			imm = int32(int16(v))
+			imm = int64(signExtend(v, sz))
 		} else {
 			v, err := c.fetch8()
 			if err != nil {
 				return c.wrap(ip, err, "立即數")
 			}
-			imm = int32(int8(v))
+			imm = int64(int8(v))
 		}
-		full := int32(int16(src)) * imm
-		c.R[m.reg] = uint16(full)
-		over := full != int32(int16(full))
+		full := int64(signExtend(src, sz)) * imm
+		c.setReg(m.reg, uint32(full), sz)
+		over := full != int64(signExtend(uint32(full), sz))
 		c.SetFlag(FlagCF, over)
 		c.SetFlag(FlagOF, over)
 		return nil
 	case 0x80, 0x81, 0x82, 0x83: // 群組 1：op r/m, imm
-		w := op&1 == 1
+		sz := c.opSizeFor(op)
+		if op == 0x82 {
+			sz = S8
+		}
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
 		var imm uint32
 		if op == 0x81 {
-			v, err := c.fetch16()
+			v, err := c.fetchImm(sz)
 			if err != nil {
 				return c.wrap(ip, err, "立即數")
 			}
-			imm = uint32(v)
+			imm = v
 		} else {
 			v, err := c.fetch8()
 			if err != nil {
 				return c.wrap(ip, err, "立即數")
 			}
 			if op == 0x83 {
-				imm = uint32(uint16(int16(int8(v)))) // 0x83 是符號延伸到 16 位元
+				imm = uint32(int32(int8(v))) & widthMask(sz) // 0x83 是符號延伸
 			} else {
 				imm = uint32(v)
 			}
 		}
-		a, err := c.readW(m.rm, w)
+		a, err := c.readOp(m.rm, sz)
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
-		res, store := c.aluOp(m.reg, a, imm, w)
+		res, store := c.aluOp(m.reg, a, imm, sz)
 		if store {
-			return c.wrap(ip, c.writeW(m.rm, res, w), "寫回")
+			return c.wrap(ip, c.writeOp(m.rm, res, sz), "寫回")
 		}
 		return nil
 	case 0x84, 0x85: // TEST r/m, r
-		w := op&1 == 1
+		sz := c.opSizeFor(op)
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		a, err := c.readW(m.rm, w)
+		a, err := c.readOp(m.rm, sz)
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
-		c.logic(a&c.regW(m.reg, w), w)
+		c.logic(a&c.reg(m.reg, sz), sz)
 		return nil
 	case 0x86, 0x87: // XCHG r/m, r
-		w := op&1 == 1
+		sz := c.opSizeFor(op)
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		a, err := c.readW(m.rm, w)
+		a, err := c.readOp(m.rm, sz)
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
-		b := c.regW(m.reg, w)
-		if err := c.writeW(m.rm, b, w); err != nil {
+		b := c.reg(m.reg, sz)
+		if err := c.writeOp(m.rm, b, sz); err != nil {
 			return c.wrap(ip, err, "寫回")
 		}
-		c.setRegW(m.reg, a, w)
+		c.setReg(m.reg, a, sz)
 		return nil
 	case 0x88, 0x89: // MOV r/m, r
-		w := op&1 == 1
+		sz := c.opSizeFor(op)
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		return c.wrap(ip, c.writeW(m.rm, c.regW(m.reg, w), w), "寫回")
+		return c.wrap(ip, c.writeOp(m.rm, c.reg(m.reg, sz), sz), "寫回")
 	case 0x8A, 0x8B: // MOV r, r/m
-		w := op&1 == 1
+		sz := c.opSizeFor(op)
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		v, err := c.readW(m.rm, w)
+		v, err := c.readOp(m.rm, sz)
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
-		c.setRegW(m.reg, v, w)
+		c.setReg(m.reg, v, sz)
 		return nil
 	case 0x8C: // MOV r/m16, sreg
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		return c.wrap(ip, c.write16(m.rm, c.Seg[m.reg&3]), "寫回")
+		return c.wrap(ip, c.writeOp(m.rm, uint32(c.Seg[m.reg&3]), S16), "寫回")
 	case 0x8D: // LEA：只算位址，不碰記憶體
 		m, err := c.decodeModRM()
 		if err != nil {
@@ -388,39 +411,51 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		if m.rm.isReg {
 			return c.errf(ip, "LEA 的運算元是暫存器（無效編碼）")
 		}
-		c.R[m.reg] = m.rm.off
+		c.setReg(m.reg, uint32(m.rm.off), c.opSize)
 		return nil
 	case 0x8E: // MOV sreg, r/m16
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		v, err := c.read16(m.rm)
+		v, err := c.readOp(m.rm, S16)
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
-		c.Seg[m.reg&3] = v
+		c.Seg[m.reg&3] = uint16(v)
 		return nil
-	case 0x8F: // POP r/m16
+	case 0x8F: // POP r/m
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		v, err := c.pop16()
+		v, err := c.popSize(c.opSize)
 		if err != nil {
 			return c.wrap(ip, err, "pop")
 		}
-		return c.wrap(ip, c.write16(m.rm, v), "寫回")
+		return c.wrap(ip, c.writeOp(m.rm, v, c.opSize), "寫回")
 	case 0x90: // NOP
 		return nil
-	case 0x98: // CBW
-		c.R[AX] = uint16(int16(int8(c.Reg8(0))))
-		return nil
-	case 0x99: // CWD
-		if c.R[AX]&0x8000 != 0 {
-			c.R[DX] = 0xFFFF
+	case 0x98: // CBW／CWDE
+		if c.opSize == S32 {
+			c.R[AX] = uint32(int32(int16(c.R16(AX))))
 		} else {
-			c.R[DX] = 0
+			c.SetR16(AX, uint16(int16(int8(c.Reg8(0)))))
+		}
+		return nil
+	case 0x99: // CWD／CDQ
+		if c.opSize == S32 {
+			if c.R[AX]&0x80000000 != 0 {
+				c.R[DX] = 0xFFFFFFFF
+			} else {
+				c.R[DX] = 0
+			}
+			return nil
+		}
+		if c.R16(AX)&0x8000 != 0 {
+			c.SetR16(DX, 0xFFFF)
+		} else {
+			c.SetR16(DX, 0)
 		}
 		return nil
 	case 0x9A: // CALL far imm
@@ -451,33 +486,33 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		c.SetReg8(4, uint8(c.Flags))
 		return nil
 	case 0xA0, 0xA1, 0xA2, 0xA3: // MOV acc, [imm16] 與反向
-		w := op&1 == 1
+		sz := c.opSizeFor(op)
 		d, err := c.fetch16()
 		if err != nil {
 			return c.wrap(ip, err, "位移")
 		}
 		o := operand{sel: c.dataSeg(DS), off: d}
 		if op < 0xA2 {
-			v, err := c.readW(o, w)
+			v, err := c.readOp(o, sz)
 			if err != nil {
 				return c.wrap(ip, err, "讀運算元")
 			}
-			c.setAcc(v, w)
+			c.setAcc(v, sz)
 			return nil
 		}
-		return c.wrap(ip, c.writeW(o, c.acc(w), w), "寫回")
+		return c.wrap(ip, c.writeOp(o, c.acc(sz), sz), "寫回")
 	case 0xA4, 0xA5, 0xA6, 0xA7, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF:
-		return c.wrap(ip, c.stringOp(op&^1, op&1 == 1), "字串指令")
+		return c.wrap(ip, c.stringOp(op&^1, c.opSizeFor(op)), "字串指令")
 	case 0xA8, 0xA9: // TEST acc, imm
-		w := op&1 == 1
-		imm, err := c.immW(w)
+		sz := c.opSizeFor(op)
+		imm, err := c.fetchImm(sz)
 		if err != nil {
 			return c.wrap(ip, err, "立即數")
 		}
-		c.logic(c.acc(w)&imm, w)
+		c.logic(c.acc(sz)&imm, sz)
 		return nil
 	case 0xC0, 0xC1, 0xD0, 0xD1, 0xD2, 0xD3: // 群組 2：位移／旋轉
-		w := op&1 == 1
+		sz := c.opSizeFor(op)
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
@@ -495,11 +530,11 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		default:
 			count = uint32(c.Reg8(1)) // CL
 		}
-		a, err := c.readW(m.rm, w)
+		a, err := c.readOp(m.rm, sz)
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
-		return c.wrap(ip, c.writeW(m.rm, c.shiftOp(m.reg, a, count, w), w), "寫回")
+		return c.wrap(ip, c.writeOp(m.rm, c.shiftOp(m.reg, a, count, sz), sz), "寫回")
 	case 0xC2, 0xC3: // RET near
 		var pop uint16
 		if op == 0xC2 {
@@ -514,7 +549,7 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 			return c.wrap(ip, err, "ret")
 		}
 		c.IP = v
-		c.R[SP] += pop
+		c.SetR16(SP, c.R16(SP)+pop)
 		return nil
 	case 0xC4, 0xC5: // LES／LDS
 		m, err := c.decodeModRM()
@@ -532,7 +567,7 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		if err != nil {
 			return c.wrap(ip, err, "讀 far 指標 selector")
 		}
-		c.R[m.reg] = off
+		c.SetR16(m.reg, off)
 		if op == 0xC4 {
 			c.Seg[ES] = sel
 		} else {
@@ -540,16 +575,16 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		}
 		return nil
 	case 0xC6, 0xC7: // MOV r/m, imm
-		w := op&1 == 1
+		sz := c.opSizeFor(op)
 		m, err := c.decodeModRM()
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		imm, err := c.immW(w)
+		imm, err := c.fetchImm(sz)
 		if err != nil {
 			return c.wrap(ip, err, "立即數")
 		}
-		return c.wrap(ip, c.writeW(m.rm, imm, w), "寫回")
+		return c.wrap(ip, c.writeOp(m.rm, imm, sz), "寫回")
 	case 0xC8: // ENTER
 		size, err := c.fetch16()
 		if err != nil {
@@ -559,13 +594,13 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		if err != nil {
 			return c.wrap(ip, err, "enter level")
 		}
-		if err := c.push16(c.R[BP]); err != nil {
+		if err := c.push16(c.R16(BP)); err != nil {
 			return c.wrap(ip, err, "enter")
 		}
-		frame := c.R[SP]
+		frame := c.R16(SP)
 		for i := uint8(1); i < lvl; i++ {
-			c.R[BP] -= 2
-			v, err := c.Bus.ReadU16(c.Seg[SS], c.R[BP])
+			c.SetR16(BP, c.R16(BP)-2)
+			v, err := c.Bus.ReadU16(c.Seg[SS], c.R16(BP))
 			if err != nil {
 				return c.wrap(ip, err, "enter 巢狀")
 			}
@@ -578,16 +613,16 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 				return c.wrap(ip, err, "enter 巢狀")
 			}
 		}
-		c.R[BP] = frame
-		c.R[SP] -= size
+		c.SetR16(BP, frame)
+		c.SetR16(SP, c.R16(SP)-size)
 		return nil
 	case 0xC9: // LEAVE
-		c.R[SP] = c.R[BP]
+		c.SetR16(SP, c.R16(BP))
 		v, err := c.pop16()
 		if err != nil {
 			return c.wrap(ip, err, "leave")
 		}
-		c.R[BP] = v
+		c.SetR16(BP, v)
 		return nil
 	case 0xCA, 0xCB: // RETF
 		var pop uint16
@@ -599,16 +634,25 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 			pop = v
 		}
 		return c.wrap(ip, c.RetFar(pop), "retf")
+	case 0xCC:
+		return c.errf(ip, "INT3（中斷點）")
 	case 0xCD: // INT imm8
 		n, err := c.fetch8()
 		if err != nil {
 			return c.wrap(ip, err, "int 號碼")
 		}
-		return c.errf(ip, "未實作的軟體中斷 INT %02Xh", n)
-	case 0xCC:
-		return c.errf(ip, "INT3（中斷點）")
+		if c.OnInt != nil {
+			handled, err := c.OnInt(c, n)
+			if err != nil {
+				return c.wrap(ip, err, "INT %02Xh", n)
+			}
+			if handled {
+				return nil
+			}
+		}
+		return c.errf(ip, "未實作的軟體中斷 INT %02Xh（AX=%04X）", n, c.R16(AX))
 	case 0xD7: // XLAT
-		v, err := c.Bus.ReadU8(c.dataSeg(DS), c.R[BX]+uint16(c.Reg8(0)))
+		v, err := c.Bus.ReadU8(c.dataSeg(DS), c.R16(BX)+uint16(c.Reg8(0)))
 		if err != nil {
 			return c.wrap(ip, err, "xlat")
 		}
@@ -619,8 +663,8 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		if err != nil {
 			return c.wrap(ip, err, "取 rel8")
 		}
-		c.R[CX]--
-		take := c.R[CX] != 0
+		c.SetR16(CX, c.R16(CX)-1)
+		take := c.R16(CX) != 0
 		if op == 0xE0 {
 			take = take && !c.Flag(FlagZF)
 		} else if op == 0xE1 {
@@ -635,7 +679,7 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		if err != nil {
 			return c.wrap(ip, err, "取 rel8")
 		}
-		if c.R[CX] == 0 {
+		if c.R16(CX) == 0 {
 			c.IP += uint16(int16(int8(d)))
 		}
 		return nil
@@ -680,7 +724,7 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		c.SetFlag(FlagCF, !c.Flag(FlagCF))
 		return nil
 	case 0xF6, 0xF7: // 群組 3
-		return c.group3(op&1 == 1, ip)
+		return c.group3(c.opSizeFor(op), ip)
 	case 0xF8:
 		c.SetFlag(FlagCF, false)
 		return nil
@@ -700,143 +744,225 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		c.SetFlag(FlagDF, true)
 		return nil
 	case 0xFE, 0xFF: // 群組 4／5
-		return c.group45(op&1 == 1, ip)
+		return c.group45(c.opSizeFor(op), ip)
 	}
 	return c.errf(ip, "未實作的 opcode %02X", op)
 }
 
-func (c *CPU) group3(w bool, ip uint16) error {
+// exec0F 處理 0F 跳脫的雙位元組指令。這裡只收 386 的**應用層**幾條：
+// 條件近程跳躍、零／符號延伸搬移、雙運算元 IMUL、SETcc。
+// 保護模式的系統指令（LGDT 那一族）不做，碰到會帶位址停下。
+func (c *CPU) exec0F(ip uint16) error {
+	op, err := c.fetch8()
+	if err != nil {
+		return c.wrap(ip, err, "取 0F 次碼")
+	}
+	switch {
+	case op >= 0x80 && op <= 0x8F: // Jcc rel16／rel32
+		var d int32
+		if c.opSize == S32 {
+			v, err := c.fetch32()
+			if err != nil {
+				return c.wrap(ip, err, "取 rel32")
+			}
+			d = int32(v)
+		} else {
+			v, err := c.fetch16()
+			if err != nil {
+				return c.wrap(ip, err, "取 rel16")
+			}
+			d = int32(int16(v))
+		}
+		if c.cond(int(op - 0x80)) {
+			c.IP += uint16(d)
+		}
+		return nil
+	case op >= 0x90 && op <= 0x9F: // SETcc r/m8
+		m, err := c.decodeModRM()
+		if err != nil {
+			return c.wrap(ip, err, "ModRM")
+		}
+		v := uint32(0)
+		if c.cond(int(op - 0x90)) {
+			v = 1
+		}
+		return c.wrap(ip, c.writeOp(m.rm, v, S8), "寫回")
+	}
+	switch op {
+	case 0xAF: // IMUL r, r/m
+		sz := c.opSize
+		m, err := c.decodeModRM()
+		if err != nil {
+			return c.wrap(ip, err, "ModRM")
+		}
+		src, err := c.readOp(m.rm, sz)
+		if err != nil {
+			return c.wrap(ip, err, "讀運算元")
+		}
+		full := int64(signExtend(c.reg(m.reg, sz), sz)) * int64(signExtend(src, sz))
+		c.setReg(m.reg, uint32(full), sz)
+		over := full != int64(signExtend(uint32(full), sz))
+		c.SetFlag(FlagCF, over)
+		c.SetFlag(FlagOF, over)
+		return nil
+	case 0xB6, 0xB7, 0xBE, 0xBF: // MOVZX／MOVSX
+		srcSz := S8
+		if op&1 == 1 {
+			srcSz = S16
+		}
+		m, err := c.decodeModRM()
+		if err != nil {
+			return c.wrap(ip, err, "ModRM")
+		}
+		v, err := c.readOp(m.rm, srcSz)
+		if err != nil {
+			return c.wrap(ip, err, "讀運算元")
+		}
+		if op >= 0xBE {
+			v = uint32(signExtend(v, srcSz))
+		}
+		c.setReg(m.reg, v, c.opSize)
+		return nil
+	}
+	return c.errf(ip, "未實作的雙位元組 opcode 0F %02X", op)
+}
+
+func (c *CPU) group3(sz Size, ip uint16) error {
 	m, err := c.decodeModRM()
 	if err != nil {
 		return c.wrap(ip, err, "ModRM")
 	}
-	a, err := c.readW(m.rm, w)
+	a, err := c.readOp(m.rm, sz)
 	if err != nil {
 		return c.wrap(ip, err, "讀運算元")
 	}
 	switch m.reg {
 	case 0, 1: // TEST r/m, imm
-		imm, err := c.immW(w)
+		imm, err := c.fetchImm(sz)
 		if err != nil {
 			return c.wrap(ip, err, "立即數")
 		}
-		c.logic(a&imm, w)
+		c.logic(a&imm, sz)
 		return nil
 	case 2: // NOT（不動旗標）
-		return c.wrap(ip, c.writeW(m.rm, ^a&widthMask(w), w), "寫回")
+		return c.wrap(ip, c.writeOp(m.rm, ^a&widthMask(sz), sz), "寫回")
 	case 3: // NEG
-		res := c.sub(0, a, w, 0)
-		c.SetFlag(FlagCF, a&widthMask(w) != 0)
-		return c.wrap(ip, c.writeW(m.rm, res, w), "寫回")
+		res := c.sub(0, a, sz, 0)
+		c.SetFlag(FlagCF, a&widthMask(sz) != 0)
+		return c.wrap(ip, c.writeOp(m.rm, res, sz), "寫回")
 	case 4: // MUL
-		if w {
-			full := uint32(c.R[AX]) * a
-			c.R[AX], c.R[DX] = uint16(full), uint16(full>>16)
-			over := c.R[DX] != 0
-			c.SetFlag(FlagCF, over)
-			c.SetFlag(FlagOF, over)
-		} else {
-			full := uint32(c.Reg8(0)) * a
-			c.R[AX] = uint16(full)
-			over := full&0xFF00 != 0
-			c.SetFlag(FlagCF, over)
-			c.SetFlag(FlagOF, over)
-		}
+		full := uint64(c.acc(sz)) * uint64(a&widthMask(sz))
+		c.mulStore(full, sz)
+		over := full>>widthBits(sz) != 0
+		c.SetFlag(FlagCF, over)
+		c.SetFlag(FlagOF, over)
 		return nil
 	case 5: // IMUL
-		if w {
-			full := int32(int16(c.R[AX])) * int32(int16(a))
-			c.R[AX], c.R[DX] = uint16(full), uint16(full>>16)
-			over := full != int32(int16(full))
-			c.SetFlag(FlagCF, over)
-			c.SetFlag(FlagOF, over)
-		} else {
-			full := int16(int8(c.Reg8(0))) * int16(int8(a))
-			c.R[AX] = uint16(full)
-			over := full != int16(int8(full))
-			c.SetFlag(FlagCF, over)
-			c.SetFlag(FlagOF, over)
-		}
+		full := int64(signExtend(c.acc(sz), sz)) * int64(signExtend(a, sz))
+		c.mulStore(uint64(full), sz)
+		over := full != int64(signExtend(uint32(full)&widthMask(sz), sz))
+		c.SetFlag(FlagCF, over)
+		c.SetFlag(FlagOF, over)
 		return nil
 	case 6: // DIV
-		if a == 0 {
+		d := uint64(a & widthMask(sz))
+		if d == 0 {
 			return c.errf(ip, "除以零")
 		}
-		if w {
-			num := uint32(c.R[DX])<<16 | uint32(c.R[AX])
-			q := num / a
-			if q > 0xFFFF {
-				return c.errf(ip, "除法溢位（商 %d 超出 16 位元）", q)
-			}
-			c.R[AX], c.R[DX] = uint16(q), uint16(num%a)
-		} else {
-			num := uint32(c.R[AX])
-			q := num / a
-			if q > 0xFF {
-				return c.errf(ip, "除法溢位（商 %d 超出 8 位元）", q)
-			}
-			c.SetReg8(0, uint8(q))
-			c.SetReg8(4, uint8(num%a))
+		num := c.divNum(sz)
+		q, r := num/d, num%d
+		if q > uint64(widthMask(sz)) {
+			return c.errf(ip, "除法溢位（商 %d 超出 %d 位元）", q, widthBits(sz))
 		}
+		c.divStore(uint32(q), uint32(r), sz)
 		return nil
 	default: // IDIV
-		if a == 0 {
+		d := int64(signExtend(a, sz))
+		if d == 0 {
 			return c.errf(ip, "除以零")
 		}
-		if w {
-			num := int32(uint32(c.R[DX])<<16 | uint32(c.R[AX]))
-			d := int32(int16(a))
-			q, r := num/d, num%d
-			if q != int32(int16(q)) {
-				return c.errf(ip, "除法溢位（商 %d 超出 16 位元）", q)
-			}
-			c.R[AX], c.R[DX] = uint16(q), uint16(r)
-		} else {
-			num := int16(c.R[AX])
-			d := int16(int8(a))
-			q, r := num/d, num%d
-			if q != int16(int8(q)) {
-				return c.errf(ip, "除法溢位（商 %d 超出 8 位元）", q)
-			}
-			c.SetReg8(0, uint8(q))
-			c.SetReg8(4, uint8(r))
+		num := c.divNumSigned(sz)
+		q, r := num/d, num%d
+		if q != int64(signExtend(uint32(q)&widthMask(sz), sz)) {
+			return c.errf(ip, "除法溢位（商 %d 超出 %d 位元）", q, widthBits(sz))
 		}
+		c.divStore(uint32(q), uint32(r), sz)
 		return nil
 	}
 }
 
-func (c *CPU) group45(w bool, ip uint16) error {
+// mulStore 把乘積寫進 AX／DX:AX／EDX:EAX。
+func (c *CPU) mulStore(full uint64, sz Size) {
+	if sz == S8 {
+		c.SetR16(AX, uint16(full))
+		return
+	}
+	c.setReg(AX, uint32(full), sz)
+	c.setReg(DX, uint32(full>>widthBits(sz)), sz)
+}
+
+// divNum 組出被除數：8 位元是 AX、16 位元是 DX:AX、32 位元是 EDX:EAX。
+func (c *CPU) divNum(sz Size) uint64 {
+	if sz == S8 {
+		return uint64(c.R16(AX))
+	}
+	return uint64(c.reg(DX, sz))<<widthBits(sz) | uint64(c.reg(AX, sz))
+}
+
+func (c *CPU) divNumSigned(sz Size) int64 {
+	if sz == S8 {
+		return int64(int16(c.R16(AX)))
+	}
+	v := c.divNum(sz)
+	if sz == S16 {
+		return int64(int32(uint32(v)))
+	}
+	return int64(v)
+}
+
+// divStore 把商與餘數寫回：8 位元是 AL／AH，其餘是 acc／DX。
+func (c *CPU) divStore(q, r uint32, sz Size) {
+	if sz == S8 {
+		c.SetReg8(0, uint8(q))
+		c.SetReg8(4, uint8(r))
+		return
+	}
+	c.setReg(AX, q, sz)
+	c.setReg(DX, r, sz)
+}
+
+func (c *CPU) group45(sz Size, ip uint16) error {
 	m, err := c.decodeModRM()
 	if err != nil {
 		return c.wrap(ip, err, "ModRM")
 	}
 	switch m.reg {
 	case 0, 1: // INC／DEC
-		a, err := c.readW(m.rm, w)
+		a, err := c.readOp(m.rm, sz)
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
 		var res uint32
 		if m.reg == 0 {
-			res = c.inc(a, w)
+			res = c.inc(a, sz)
 		} else {
-			res = c.dec(a, w)
+			res = c.dec(a, sz)
 		}
-		return c.wrap(ip, c.writeW(m.rm, res, w), "寫回")
+		return c.wrap(ip, c.writeOp(m.rm, res, sz), "寫回")
 	}
-	if !w {
+	if sz == S8 {
 		return c.errf(ip, "群組 4（FE）只有 INC／DEC，收到 reg=%d", m.reg)
 	}
 	switch m.reg {
 	case 2: // CALL near r/m
-		v, err := c.read16(m.rm)
+		v, err := c.readOp(m.rm, S16)
 		if err != nil {
 			return c.wrap(ip, err, "讀目標")
 		}
 		if err := c.push16(c.IP); err != nil {
 			return c.wrap(ip, err, "call")
 		}
-		c.IP = v
+		c.IP = uint16(v)
 		return nil
 	case 3, 5: // CALL／JMP far m16:16
 		if m.rm.isReg {
@@ -852,60 +978,18 @@ func (c *CPU) group45(w bool, ip uint16) error {
 		}
 		return c.wrap(ip, c.farTransfer(sel, off, m.reg == 3), "far 轉移")
 	case 4: // JMP near r/m
-		v, err := c.read16(m.rm)
+		v, err := c.readOp(m.rm, S16)
 		if err != nil {
 			return c.wrap(ip, err, "讀目標")
 		}
-		c.IP = v
+		c.IP = uint16(v)
 		return nil
-	case 6: // PUSH r/m16
-		v, err := c.read16(m.rm)
+	case 6: // PUSH r/m
+		v, err := c.readOp(m.rm, sz)
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
-		return c.wrap(ip, c.push16(v), "push")
+		return c.wrap(ip, c.pushSize(v, sz), "push")
 	}
 	return c.errf(ip, "群組 5 的 reg=%d 未定義", m.reg)
-}
-
-// --- 依位寬取用的小工具 ---
-
-func (c *CPU) readW(o operand, w bool) (uint32, error) {
-	if w {
-		v, err := c.read16(o)
-		return uint32(v), err
-	}
-	v, err := c.read8(o)
-	return uint32(v), err
-}
-
-func (c *CPU) writeW(o operand, v uint32, w bool) error {
-	if w {
-		return c.write16(o, uint16(v))
-	}
-	return c.write8(o, uint8(v))
-}
-
-func (c *CPU) regW(i int, w bool) uint32 {
-	if w {
-		return uint32(c.R[i])
-	}
-	return uint32(c.Reg8(i))
-}
-
-func (c *CPU) setRegW(i int, v uint32, w bool) {
-	if w {
-		c.R[i] = uint16(v)
-		return
-	}
-	c.SetReg8(i, uint8(v))
-}
-
-func (c *CPU) immW(w bool) (uint32, error) {
-	if w {
-		v, err := c.fetch16()
-		return uint32(v), err
-	}
-	v, err := c.fetch8()
-	return uint32(v), err
 }
