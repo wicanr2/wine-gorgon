@@ -167,8 +167,16 @@ func RegisterGDI(p *Process) {
 		}
 		dx, dy := int(int16(a.Word(2))), int(int16(a.Word(4)))
 		bw, bh := int(int16(a.Word(6))), int(int16(a.Word(8)))
-		// 大面積、畫到視窗上的 blit 記一筆（去重）：地圖落點對不上時，
-		// 要先分清楚是「遊戲傳的座標不同」還是「我們畫錯地方」。
+		// blit 記一筆（去重）：地圖落點對不上時，要先分清楚是「遊戲傳的
+		// 座標不同」還是「我們畫錯地方」。兩種都記：畫到視窗上的大面積
+		// blit，以及 32×32 畫進記憶體 DC 的那些——後者是圖集切片，看得到
+		// 磚塊是怎麼組進 port 點陣圖的。
+		if p.LogBigBlits && dst.Window == 0 && bw == 32 && bh == 32 {
+			p.note("磚塊 → 記憶體 DC %04X 位置 (%d,%d)，來源 %04X (%d,%d)，呼叫端 %04X:%04X",
+				a.Word(0), dx, dy, a.Word(10),
+				int(int16(a.Word(12))), int(int16(a.Word(14))),
+				p.LastCall.FromCS, p.LastCall.FromIP)
+		}
 		if p.LogBigBlits && dst.Window != 0 && bw*bh >= 256 {
 			p.note("BitBlt → 視窗 %04X 客戶 (%d,%d) %dx%d，來源 %04X (%d,%d)，呼叫端 %04X:%04X",
 				dst.Window, dx, dy, bw, bh, a.Word(10),
