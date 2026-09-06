@@ -52,7 +52,13 @@ func runScript(p *win16.Process, path string, echo func(string)) error {
 
 func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return nil
+	}
 	cmd, args := fields[0], fields[1:]
+	if handled, err := probeCommand(p, cmd, args, echo); handled {
+		return err
+	}
 	switch cmd {
 	case "run":
 		n, err := strconv.ParseUint(args[0], 10, 64)
@@ -112,6 +118,24 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 		}
 		h := p.Click(x, y)
 		echo(fmt.Sprintf("click %d,%d → 視窗 %04X", x, y, h))
+		return nil
+	case "keywin":
+		if len(args) < 2 {
+			return fmt.Errorf("keywin 需要鍵碼與視窗標題")
+		}
+		vk, err := strconv.ParseUint(args[0], 0, 16)
+		if err != nil {
+			return err
+		}
+		h, ok := findWindow(p, strings.Join(args[1:], " "))
+		if !ok {
+			return fmt.Errorf("找不到輸入視窗")
+		}
+		previous := p.Focus
+		p.Focus = h
+		p.TypeKey(uint16(vk))
+		p.Focus = previous
+		echo(fmt.Sprintf("keywin %d → 視窗 %04X", vk, h))
 		return nil
 	case "key":
 		vk, err := strconv.ParseUint(args[0], 0, 16)

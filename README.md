@@ -9,6 +9,10 @@
 姊妹專案 [`dosgolem`](https://github.com/wicanr2/dosgolem) 做的是同一件事的
 DOS 版本；wine-gorgon 換掉最底下兩層（機器 → Win16 API），觀測層的形狀照抄。
 
+固定種子與事件對拍可用 `until`／`keywin`／`poke`／`state`／`traceuntil`：
+以有界執行、比較後寫入與狀態收據控制實驗，詳見
+[探針契約](docs/probe-control.md)。遊戲位址與種子配方保留在各遊戲專案。
+
 ## 起源：Wine 不好跟 AI agent 配合
 
 Wine 是為「人坐在前面用 Windows 程式」設計的——畫面出在 X 上、輸入靠 X 事件、

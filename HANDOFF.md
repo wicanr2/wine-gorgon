@@ -1,3 +1,17 @@
+# 固定種子對拍擴充（2026-09-06，Civ1 I539）
+
+新增 until／keywin／poke／state／traceuntil，契約與回呼觀察限制見
+`docs/probe-control.md`。合成測試涵蓋準確停止、逾限、原子寫入、重播、指定視窗。
+原版實驗由 civ1 的 `tools/oracle/wine_gorgon_barbarians.py` 驗證：三組種子，
+同種子 trace／單位表逐 byte 相同，另一種子改變登陸位置；完整 RNG state
+與 civ1 正式 RNG／隊伍 helper 都相符。這不是整體 Win16 或野蠻人完整 parity。
+
+原版資料與收據留 civ1 本機 i539-oracle/replay-final，不提交本倉庫。
+原版函式與科技條件的定位留 civ1 DS335；執行器不硬編 Civilization 位址。
+原始 HEAD 7913171，擴充隨本輪提交；Docker --rm，未建立映像。
+
+---
+
 # 接手點
 
 ## 現在跑得到哪裡
