@@ -92,6 +92,12 @@ func runUntil(p *win16.Process, target probeAddress, limit uint64, watch func() 
 // poke 採比較後寫入：預期 bytes 不符或範圍錯誤時，一個 byte 都不改。
 // traceuntil 有界串流寫 JSONL；失敗尾筆保留 complete=false，不能當成功收據。
 func probeCommand(p *win16.Process, cmd string, args []string, echo func(string)) (bool, error) {
+	if cmd == "reg" {
+		return true, setProbeRegister(p, args, echo)
+	}
+	if cmd == "watchmemuntil" {
+		return true, watchMemoryUntil(p, args)
+	}
 	arity := map[string]int{"until": 2, "poke": 3, "state": 3, "traceuntil": 6}
 	count, ok := arity[cmd]
 	if !ok {
