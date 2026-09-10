@@ -5,6 +5,7 @@ func (c *CPU) Step() error {
 	c.segOverride = -1
 	c.repPrefix = 0
 	c.opSize = S16
+	c.addrSize = S16
 	startIP := c.IP
 
 	for {
@@ -31,7 +32,8 @@ func (c *CPU) Step() error {
 			c.opSize = S32
 			continue
 		case 0x67:
-			return c.errf(startIP, "位址大小前綴 67（32 位元定址，未實作）")
+			c.addrSize = S32
+			continue
 		case 0xF0: // LOCK：單執行緒下沒有語意
 			continue
 		case 0xF2, 0xF3:

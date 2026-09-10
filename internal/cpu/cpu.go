@@ -102,6 +102,11 @@ type CPU struct {
 	segOverride int // -1 表示沒有
 	repPrefix   uint8
 	opSize      Size // 預設 S16，被 66 前綴改成 S32
+
+	// addrSize 是這一條指令的**定址**位寬，由 0x67 前綴切成 S32。
+	// 與 opSize（0x66 切運算元位寬）是兩件事：`mov [eax], bl` 是
+	// 32 位元定址配 8 位元運算元。
+	addrSize Size
 }
 
 // New 造一顆重置狀態的 CPU。

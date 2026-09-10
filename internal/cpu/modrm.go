@@ -35,6 +35,9 @@ func (c *CPU) decodeModRM() (modrm, error) {
 		m.rm = operand{isReg: true, reg: rm}
 		return m, nil
 	}
+	if c.addrSize == S32 {
+		return c.decodeModRM32(m, rm)
+	}
 
 	var base uint16
 	defSeg := DS
@@ -102,4 +105,81 @@ func (c *CPU) writeOp(o operand, v uint32, sz Size) error {
 		return nil
 	}
 	return c.busWrite(o.sel, o.off, sz, v)
+}
+
+// decodeModRM32 解 386 的 32 位元定址（`0x67` 前綴之後的 ModRM）。
+//
+// 與 16 位元版的差別有三個：基底是 32 位元暫存器、`rm=100` 表示後面跟一個
+// SIB 位元組、`mod=00 rm=101` 是純 disp32 而不是 `[BP]`。
+//
+// **預設段的規則跟著基底走**：基底是 EBP 或 ESP 時是 SS，其餘是 DS。
+// 這與 16 位元版「只要用到 BP 就是 SS」同源，寫錯一樣不會當掉，
+// 只會安靜地讀到別的段。
+//
+// 位移最後截成 16 位元存進 operand。在 16 位元保護模式下 segment 的
+// limit 不超過 64 KiB，32 位元定址只是定址方式不同，算出來的有效位址
+// 仍落在段內；真的超出時截斷會讀到錯的地方，所以這裡先檢查再截。
+func (c *CPU) decodeModRM32(m modrm, rm int) (modrm, error) {
+	var base uint32
+	defSeg := DS
+	hasBase := true
+
+	if rm == 4 { // SIB
+		sib, err := c.fetch8()
+		if err != nil {
+			return modrm{}, err
+		}
+		scale := uint(sib >> 6)
+		idx := int(sib>>3) & 7
+		b := int(sib) & 7
+		if idx != 4 { // idx=100 表示沒有 index
+			base += c.R[idx] << scale
+		}
+		if b == 5 && m.mod == 0 {
+			d, err := c.fetch32()
+			if err != nil {
+				return modrm{}, err
+			}
+			base += d
+			hasBase = false
+		} else {
+			base += c.R[b]
+			if b == BP || b == SP {
+				defSeg = SS
+			}
+		}
+	} else if rm == 5 && m.mod == 0 {
+		d, err := c.fetch32()
+		if err != nil {
+			return modrm{}, err
+		}
+		base = d
+		hasBase = false
+	} else {
+		base = c.R[rm]
+		if rm == BP {
+			defSeg = SS
+		}
+	}
+	_ = hasBase
+
+	switch m.mod {
+	case 1:
+		d, err := c.fetch8()
+		if err != nil {
+			return modrm{}, err
+		}
+		base += uint32(int32(int8(d)))
+	case 2:
+		d, err := c.fetch32()
+		if err != nil {
+			return modrm{}, err
+		}
+		base += d
+	}
+	if base > 0xFFFF {
+		return modrm{}, c.errf(c.IP, "32 位元定址算出 %08X，超出 16 位元段界", base)
+	}
+	m.rm = operand{sel: c.dataSeg(defSeg), off: uint16(base)}
+	return m, nil
 }

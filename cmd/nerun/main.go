@@ -27,6 +27,7 @@ func main() {
 	data := flag.String("data", "", "原版資料目錄（唯讀掛成 C:\\CIV）")
 	write := flag.String("write", "", "可寫目錄；不給就一律不准寫")
 	shot := flag.String("shot", "", "結束時把整個畫面存成 PNG")
+	wingShot := flag.String("wing-shot", "", "結束時把 WinG DIB 存成 PNG（遊戲自己畫的那一塊，不是螢幕合成結果）")
 	screen := flag.String("screen", "640x480", "螢幕尺寸，例如 800x600")
 	collapse := flag.Bool("collapse-palette", false, "把和靜態色相同的調色盤項收攏（原版量到的是不收攏）")
 	openPath := flag.String("open", "", "檔案對話框要回傳的 DOS 路徑；空的表示使用者按取消")
@@ -39,13 +40,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *script, *around, *screen, *openPath, *collapse, uint32(*clockUS)); err != nil {
+	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *wingShot, *script, *around, *screen, *openPath, *collapse, uint32(*clockUS)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, steps uint64, traceN int, stub bool, data, write, shot, script, around, screen, openPath string, collapse bool, clockUS uint32) error {
+func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wingShot, script, around, screen, openPath string, collapse bool, clockUS uint32) error {
 	img, err := ne.Open(path)
 	if err != nil {
 		return err
@@ -192,6 +193,23 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, sc
 		fmt.Printf("  %04X %s %-10s (%d,%d %dx%d) 客戶 (%d,%d %dx%d) id=%d %q\n",
 			w.Handle, vis, kind, w.X, w.Y, w.W, w.H,
 			w.ClientX, w.ClientY, w.ClientW, w.ClientH, w.CtrlID, w.Text)
+	}
+	if wingShot != "" {
+		// WinG DIB 是遊戲直接寫的那塊記憶體——畫面的真值在這裡，
+		// 不在螢幕合成結果。多塊時存最大的那一塊（整個畫面的那一塊）。
+		var best *win16.Surface
+		for s := range p.WinGBits {
+			if best == nil || s.W*s.H > best.W*best.H {
+				best = s
+			}
+		}
+		if best == nil {
+			fmt.Println("沒有 WinG DIB 可存")
+		} else if err := p.SavePNG(wingShot, best); err != nil {
+			return err
+		} else {
+			fmt.Printf("WinG DIB 存到 %s（%d×%d）\n", wingShot, best.W, best.H)
+		}
 	}
 	if shot != "" {
 		if err := p.SavePNG(shot, p.Screen); err != nil {

@@ -1,5 +1,7 @@
 package win16
 
+import "fmt"
+
 // WinG（`WING.DLL` 1.0）——PTO2 把整個畫面畫進一塊 WinG DIB，
 // 所以這一組是「畫面變成可定址記憶體」的入口（見 pto2-remake 的
 // `docs/spec/14-oracle-wine-gorgon.md` §6）。
@@ -88,7 +90,17 @@ func RegisterWinG(p *Process) {
 			p.note("WinGCreateBitmap(%dx%d) 配不到記憶體", w, hgt)
 			return 0, nil
 		}
-		surf := &Surface{W: w, H: hgt, Stride: stride, Bits: b.Data}
+		// AllocHuge 把一個完整 backing 切成 64 KiB 一段分給連號 selector，
+		// 回傳的 Block 只持有第一段。那些段共用同一個 backing 而且 cap 足夠，
+		// 所以再切一次就拿得回完整範圍——Surface 要看到整塊，不是只有前 64 KiB。
+		need := stride * hgt
+		bits := b.Data
+		if cap(bits) >= need {
+			bits = bits[:need]
+		} else {
+			p.note("WinGCreateBitmap：backing 只有 %d bytes，需要 %d", cap(bits), need)
+		}
+		surf := &Surface{W: w, H: hgt, Stride: stride, Bits: bits}
 		if p.WinGBits == nil {
 			p.WinGBits = map[*Surface]uint16{}
 		}
@@ -156,11 +168,134 @@ func RegisterWinG(p *Process) {
 		x, y := int(int16(a.Word(2))), int(int16(a.Word(4)))
 		w, hgt := int(int16(a.Word(6))), int(int16(a.Word(8)))
 		sx, sy := int(int16(a.Word(12))), int(int16(a.Word(14)))
-		// TODO：實際搬像素還沒接上 GDI 的 blit 路徑。
-		// 對拍讀的是 WinG DIB 那塊 bits（遊戲自己寫的），不是這裡的輸出，
-		// 所以第一幀對拍不必等這一支；要做視窗畫面才需要。
-		p.note("WinGBitBlt dst %04X (%d,%d) %dx%d ← src %04X (%d,%d)：尚未搬像素",
-			dst.Handle, x, y, w, hgt, src.Handle, sx, sy)
+		// WinG 的 BitBlt 沒有 rop 參數，永遠是 SRCCOPY（0x00CC0020）。
+		// 來源是遊戲自己寫好的 WinG DIB，目的通常是視窗 DC——
+		// 這一步走完，-shot 存出來的畫面才是遊戲真正畫的那一張。
+		const srcCopy = 0x00CC0020
+		BitBlt(dst, x, y, w, hgt, src, sx, sy, srcCopy, 0)
+		p.Blits++
 		return 1, nil
+	}
+
+	// --- TOOLHELP ---
+	//
+	// TimerCount(TIMERINFO far*)：填「開機以來」與「這個 VM 用掉」的毫秒數。
+	// PTO2 用它做動畫節拍。回傳非零表示成功。
+	h["TOOLHELP.#80"] = func(p *Process, a Args) (uint32, error) {
+		sel, off := a.Ptr(0)
+		ms := uint32(p.Clock.Millis())
+		put32 := func(d uint16, v uint32) {
+			_ = p.Mod.Mem.WriteU16(sel, off+d, uint16(v))
+			_ = p.Mod.Mem.WriteU16(sel, off+d+2, uint16(v>>16))
+		}
+		put32(0, 12) // dwSize
+		put32(4, ms) // dwmsSinceStart
+		put32(8, ms) // dwmsThisVM
+		return 1, nil
+	}
+
+	// TerminateApp(HTASK, WORD flags)：flags 帶 NO_UAE_BOX(0) 或 UAE_BOX(1)。
+	// 這裡直接讓行程結束，理由與 INT 21h AH=4Ch 相同。
+	h["TOOLHELP.#77"] = func(p *Process, _ Args) (uint32, error) {
+		return 0, &ExitError{Code: 0}
+	}
+
+	// --- USER.wvsprintf ---
+	//
+	// wvsprintf(LPSTR out, LPCSTR fmt, LPCVOID arglist)
+	//
+	// Win16 的 arglist 是「參數在堆疊上的位置」，不是可攜的 va_list：
+	// 參數逐一往上排，word 佔 2 bytes、long 與 far 指標佔 4 bytes。
+	// 這裡照 fmt 逐個取用，取多少由格式字元決定——取錯寬度會讓後面
+	// 全部錯位，而且輸出看起來仍像一句話，所以寬度規則要對齊 Win16 文件。
+	//
+	// 支援 %d %i %u %x %X %c %s %ld %lu %lx 與 %%；
+	// 旗標只認寬度與 0 補位（PTO2 的 "%2d"／"%04X" 這一類）。
+	h["USER.#421"] = func(p *Process, a Args) (uint32, error) {
+		osel, ooff := a.Ptr(0)
+		fsel, foff := a.Ptr(4)
+		asel, aoff := a.Ptr(8)
+		fmtStr := p.CString(fsel, foff)
+
+		next16 := func() uint32 {
+			v, _ := p.Mod.Mem.ReadU16(asel, aoff)
+			aoff += 2
+			return uint32(v)
+		}
+		next32 := func() uint32 {
+			lo := next16()
+			hi := next16()
+			return hi<<16 | lo
+		}
+
+		var out []byte
+		for i := 0; i < len(fmtStr); i++ {
+			if fmtStr[i] != '%' {
+				out = append(out, fmtStr[i])
+				continue
+			}
+			i++
+			if i >= len(fmtStr) {
+				break
+			}
+			if fmtStr[i] == '%' {
+				out = append(out, '%')
+				continue
+			}
+			spec := "%"
+			for i < len(fmtStr) && (fmtStr[i] == '-' || fmtStr[i] == '0' ||
+				fmtStr[i] == '+' || fmtStr[i] == ' ' || (fmtStr[i] >= '0' && fmtStr[i] <= '9') ||
+				fmtStr[i] == '.') {
+				spec += string(fmtStr[i])
+				i++
+			}
+			long := false
+			for i < len(fmtStr) && (fmtStr[i] == 'l' || fmtStr[i] == 'h') {
+				long = long || fmtStr[i] == 'l'
+				i++
+			}
+			if i >= len(fmtStr) {
+				break
+			}
+			switch verb := fmtStr[i]; verb {
+			case 'd', 'i':
+				if long {
+					out = append(out, fmt.Sprintf(spec+"d", int32(next32()))...)
+				} else {
+					out = append(out, fmt.Sprintf(spec+"d", int16(next16()))...)
+				}
+			case 'u':
+				if long {
+					out = append(out, fmt.Sprintf(spec+"d", next32())...)
+				} else {
+					out = append(out, fmt.Sprintf(spec+"d", next16())...)
+				}
+			case 'x', 'X':
+				v := next16()
+				if long {
+					v = next32()
+				}
+				out = append(out, fmt.Sprintf(spec+string(verb), v)...)
+			case 'c':
+				out = append(out, byte(next16()))
+			case 's':
+				sel := uint16(0)
+				off := uint16(0)
+				lo := next16()
+				hi := next16()
+				off, sel = uint16(lo), uint16(hi)
+				out = append(out, p.CString(sel, off)...)
+			default:
+				// 不認得的格式字元原樣輸出，並記一筆——沉默地吃掉會讓
+				// 後面的參數全部錯位。
+				p.note("wvsprintf 不認得的格式 %%%c（fmt=%q）", verb, fmtStr)
+				out = append(out, '%', verb)
+			}
+		}
+		for k := 0; k < len(out); k++ {
+			_ = p.Mod.Mem.WriteU8(osel, ooff+uint16(k), out[k])
+		}
+		_ = p.Mod.Mem.WriteU8(osel, ooff+uint16(len(out)), 0)
+		return uint32(len(out)), nil
 	}
 }
