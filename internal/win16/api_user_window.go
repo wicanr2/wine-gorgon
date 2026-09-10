@@ -1066,6 +1066,7 @@ var registrations = []registration{
 	{"USER 視窗", RegisterUserWindow},
 	{"USER 繪圖", RegisterUserDraw},
 	{"GDI", RegisterGDI},
+	{"WinG", RegisterWinG},
 	{"檔案", RegisterFile},
 	{"資源", RegisterResource},
 	{"對話框", RegisterDialog},

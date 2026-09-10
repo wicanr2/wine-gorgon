@@ -40,6 +40,11 @@ type Process struct {
 	// TraceLimit 是 Trace 的上限，避免長跑把記憶體吃光；0 表示不限。
 	TraceLimit int
 
+	// WinGBits 記每塊 WinG DIB 的 bits 落在哪個 selector。
+	// 遊戲直接寫那塊記憶體畫畫面，Surface 與它共用同一份 bytes——
+	// 對拍時讀 Surface 就是讀原版當下的畫面。
+	WinGBits map[*Surface]uint16
+
 	// IntVectors 存 INT 21h AH=25h 設進來的中斷向量（鍵是中斷號，值是 seg:off）。
 	// wine-gorgon 沒有真的 IVT，也不會把控制權交給這些處理器；保存它們是因為
 	// Borland 啟動碼的模式是「先 AH=35h 取出、結束時 AH=25h 放回」，
