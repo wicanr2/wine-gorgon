@@ -18,6 +18,8 @@ import (
 //
 //	run 200000        跑 200000 條指令（碰到錯誤就停）
 //	click 300,200     在螢幕座標點一下
+//	menu Animations   選一個選單項（或 `menu #108`）：送 WM_COMMAND
+//	menus             印出選單樹與目前的勾選／停用狀態
 //	key 13            送一個虛擬鍵碼
 //	type 你好         逐字送 WM_CHAR
 //	shot out.png      把整個畫面存成 PNG
@@ -208,6 +210,68 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 			echo(fmt.Sprintf("  第 %d 步 視窗 %04X 螢幕 (%d,%d) %q",
 				o.Steps, o.Window, o.ScreenX, o.ScreenY, o.Text))
 		}
+		return nil
+	case "menu":
+		// 選一個選單項：`menu Animations` 或 `menu #108`。
+		// 送的是 WM_COMMAND，走的是程式自己的 WndProc 派送——**不是**
+		// 直接改變數。真 Windows 的選單追蹤（反白、彈出、鍵盤導覽）不在
+		// 這一層；對拍要的是「那個命令有沒有進到程式裡」。
+		want := strings.Join(args, " ")
+		if want == "" {
+			return fmt.Errorf("menu 需要選單項的文字或 #id")
+		}
+		_, m, ok := p.MenuWindow()
+		if !ok {
+			return fmt.Errorf("目前沒有任何視窗帶選單")
+		}
+		var item *win16.MenuItem
+		if strings.HasPrefix(want, "#") {
+			id, err := strconv.ParseUint(want[1:], 0, 16)
+			if err != nil {
+				return fmt.Errorf("menu 的 #id 解不開：%v", err)
+			}
+			item = m.Find(uint16(id))
+		} else {
+			item = m.FindText(want)
+		}
+		if item == nil {
+			return fmt.Errorf("選單裡找不到 %q", want)
+		}
+		hwnd, err := p.ClickMenu(item)
+		if err != nil {
+			return err
+		}
+		echo(fmt.Sprintf("menu %q → 命令 %d 送給視窗 %04X（勾選 %v）",
+			item.Text, item.ID, hwnd, item.Checked()))
+		return nil
+	case "menus":
+		// 印出選單樹與**目前的勾選／停用狀態**。CIV.EXE 用 CheckMenuItem
+		// 表示選項開關，所以這是「這個選項現在是開的嗎」的外部訊號。
+		_, m, ok := p.MenuWindow()
+		if !ok {
+			echo("  （沒有任何視窗帶選單）")
+			return nil
+		}
+		var walk func(items []*win16.MenuItem, depth int)
+		walk = func(items []*win16.MenuItem, depth int) {
+			for _, it := range items {
+				mark := " "
+				if it.Checked() {
+					mark = "v"
+				}
+				if it.Disabled() {
+					mark = "-"
+				}
+				if it.IsPopup() {
+					echo(fmt.Sprintf("%s  [%s] %q", strings.Repeat("  ", depth), mark, it.Text))
+					walk(it.Children, depth+1)
+					continue
+				}
+				echo(fmt.Sprintf("%s  [%s] id=%-4d %q",
+					strings.Repeat("  ", depth), mark, it.ID, it.Text))
+			}
+		}
+		walk(m.Items, 0)
 		return nil
 	case "wins":
 		// 列出目前所有視窗的幾何。用來回答「某個子視窗的 client 有多大」

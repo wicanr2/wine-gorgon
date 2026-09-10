@@ -88,8 +88,13 @@ func RegisterUserWindow(p *Process) {
 		}
 		// 類別帶了選單名稱而且呼叫端沒給 hMenu 時，Windows 會自己載入
 		// 那個選單——選單列會吃掉客戶區 SM_CYMENU 的高度，直接影響
-		// 地圖從第幾列開始畫。
+		// 地圖從第幾列開始畫。**真的把範本載進來**：程式不呼叫 LoadMenu，
+		// 它只用 GetMenu 拿 handle 再對項目下 CheckMenuItem／EnableMenuItem，
+		// 所以這裡不載，那些呼叫就沒有東西可以記。
 		w.HasMenu = style&WSChild == 0 && (menu != 0 || cls.MenuName != "")
+		if w.HasMenu && w.Menu == 0 && cls.MenuName != "" {
+			w.Menu = p.loadClassMenu(cls.MenuName)
+		}
 		w.Handle = p.nextHWnd
 		p.nextHWnd++
 		p.note("CreateWindow %q 樣式 %08X 位置 (%d,%d) %dx%d 父 %04X",

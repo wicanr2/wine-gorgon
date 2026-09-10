@@ -82,19 +82,43 @@ func RegisterMisc(p *Process) {
 
 	h["USER.#171"] = func(p *Process, _ Args) (uint32, error) { return 1, nil } // WinHelp
 
-	// 選單：Civilization 的選單列會吃掉客戶區的高度（已在版面算進去），
-	// 但選單項目的勾選與啟用只影響選單本身的外觀。
+	// 選單：選單列會吃掉客戶區的高度（已在版面算進去），而**項目的勾選與
+	// 啟用要真的記住**——CIV.EXE 用 CheckMenuItem 表示選項開關的目前值
+	// （實跑一趟 24 次），那是「這個選項現在是開的嗎」唯一的外部訊號。
 	h["USER.#157"] = func(p *Process, a Args) (uint32, error) { // GetMenu
 		w, ok := p.Window(a.Word(0))
 		if !ok || !w.HasMenu {
 			return 0, nil
 		}
-		return 0x0300, nil
+		return uint32(w.Menu), nil
 	}
-	h["USER.#154"] = func(p *Process, _ Args) (uint32, error) { return 0, nil } // CheckMenuItem
-	h["USER.#155"] = func(p *Process, _ Args) (uint32, error) { return 0, nil } // EnableMenuItem
+
+	// CheckMenuItem(HMENU, UINT idItem, UINT flags) → 舊狀態（失敗回 -1）
+	h["USER.#154"] = func(p *Process, a Args) (uint32, error) {
+		return p.setMenuItemFlags(a.Word(0), a.Word(2), a.Word(4), MFChecked)
+	}
+
+	// EnableMenuItem(HMENU, UINT idItem, UINT flags) → 舊狀態
+	h["USER.#155"] = func(p *Process, a Args) (uint32, error) {
+		return p.setMenuItemFlags(a.Word(0), a.Word(2), a.Word(4), MFGrayed|MFDisabled)
+	}
+
 	h["USER.#160"] = func(p *Process, _ Args) (uint32, error) { return 1, nil } // DrawMenuBar
-	h["USER.#414"] = func(p *Process, _ Args) (uint32, error) { return 1, nil } // ModifyMenu
+
+	// ModifyMenu(HMENU, UINT pos, UINT flags, UINT idNew, LPCSTR text)
+	// 只更新狀態位元與文字；CIV.EXE 用它換「Sounds ON／OFF」那一類字樣。
+	h["USER.#414"] = func(p *Process, a Args) (uint32, error) {
+		m, item := p.menuItem(a.Word(0), a.Word(2), a.Word(4))
+		if item == nil {
+			return 0, nil
+		}
+		_ = m
+		item.Flags = a.Word(4) &^ (MFByPosition | MFPopup)
+		if sel, off := a.Ptr(8); sel != 0 {
+			item.Text = p.CString(sel, off)
+		}
+		return 1, nil
+	}
 
 	// 捲軸：位置與範圍會被遊戲讀回去算地圖捲動，所以要真的記住。
 	h["USER.#62"] = func(p *Process, a Args) (uint32, error) { // SetScrollPos

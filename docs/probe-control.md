@@ -12,6 +12,8 @@
 | `watchmemuntil stop max_steps output.jsonl memory length` | 逐外層步驟觀察記憶體改變，保存前後完整狀態；尾筆必須 complete；single_step=false 只能視為回呼聚合變化 |
 | `state output.json selector:offset length` | 保存 CPU 暫存器、步數與原始記憶體；不是可還原的整個 Process 快照 |
 | `traceuntil stop max_steps watch output.jsonl memory length` | 執行至 stop，每次 watch 命中串流保存 CPU 與記憶體；尾筆明列 complete 與命中數 |
+| `menu 文字\|#id` | 選一個選單項：送 `WM_COMMAND` 給擁有選單的視窗；子選單與停用中的項目一律拒絕，不送訊息 |
+| `menus` | 印出選單樹與**目前的勾選／停用狀態**（程式自己用 `CheckMenuItem` 寫的那一份）|
 
 位址使用執行器的 selector:offset，**不是 IDA 線性位址**。固定 NE 段號的
 selector 由 `SegSelector` 計算；遊戲配方必須核對 EXE 雜湊與段內 bytes。
@@ -31,3 +33,20 @@ IP 僅檢查記憶體界限，呼叫者仍須以原始 bytes／IDA 證明指令�
 
 `watchmemuntil` 記錄的是位元組改變；寫回相同值不產生紀錄。最後一筆變更
 只能稱最後可觀察改值，所有 writer 的完整性仍需指令／資料流證據。
+
+
+## 選單
+
+選單由視窗類別的 `lpszMenuName` 隱式載入（CIV.EXE 不呼叫 `LoadMenu`／
+`SetMenu`／`TrackPopupMenu`；實跑一趟只有 `GetMenu` 1 次、`CheckMenuItem`
+24 次、`EnableMenuItem` 81 次、`ModifyMenu` 16 次——**它只讀寫項目狀態，
+不自己組選單**）。因此本工具做的是：解析 `RT_MENU` 範本成一棵樹、把勾選與
+啟用狀態記住、把「點一個項目」變成送 `WM_COMMAND`。
+
+**不做的**：滑鼠追蹤、彈出視窗的繪製、鍵盤導覽（Alt＋助憶字元）。腳本要的是
+「那個命令有沒有進到程式的 WndProc」，不是選單長什麼樣——`menu` 送的訊息與
+真 Windows 選了那一項時送的是同一則。
+
+`menus` 的勾選狀態值得單獨講：它**不是本工具推出來的**，是程式自己呼叫
+`CheckMenuItem` 寫進去的。所以它可以當成「這個選項現在是開的嗎」的獨立訊號
+——與程式內部的選項字是兩條不同的路徑，兩邊對得上才算證實。

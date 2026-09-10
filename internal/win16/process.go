@@ -144,6 +144,11 @@ type Process struct {
 	// resources 是 FindResource 發出去的 HRSRC 對應表（1-based）。
 	resources []ne.Resource
 
+	// Menus 是已載入的選單，key 是 HMENU。CIV.EXE 的選單由視窗類別的
+	// `lpszMenuName` 隱式載入（它不呼叫 LoadMenu），所以掛在建視窗那裡。
+	Menus     map[uint16]*Menu
+	nextHMenu uint16
+
 	dialogSeq int
 	msgCount  map[uint16]int
 
@@ -329,6 +334,8 @@ func NewProcessSized(mod *Module, screenW, screenH int) (*Process, error) {
 	p.Objects = NewObjects()
 	p.Classes = map[string]*Class{}
 	p.Windows = map[uint16]*Window{}
+	p.Menus = map[uint16]*Menu{}
+	p.nextHMenu = 0x0300
 	p.nextHWnd = 0x0800
 	p.nextTimerID = 0x8000
 	p.MsgLogSize = 4000
