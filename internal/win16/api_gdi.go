@@ -301,6 +301,126 @@ func RegisterGDI(p *Process) {
 	// AnimatePalette 的參數形狀相同，差別是它直接動實體調色盤。
 	h["GDI.#367"] = func(p *Process, a Args) (uint32, error) { return p.setPaletteEntries(a, true) }
 
+	// CreateDIBitmap(HDC, BITMAPINFOHEADER far*, DWORD init, void far* bits,
+	//                BITMAPINFO far*, UINT usage)
+	// 從 DIB 造一張 DDB。dwInit 帶 CBM_INIT(4) 時要把 bits 的內容搬進去。
+	h["GDI.#442"] = func(p *Process, a Args) (uint32, error) {
+		hsel, hoff := a.Ptr(2)
+		rd32 := func(d uint16) uint32 {
+			lo, _ := p.Mod.Mem.ReadU16(hsel, hoff+d)
+			hi, _ := p.Mod.Mem.ReadU16(hsel, hoff+d+2)
+			return uint32(hi)<<16 | uint32(lo)
+		}
+		w := int(int32(rd32(4)))
+		hgt := int(int32(rd32(8)))
+		topDown := hgt < 0
+		if hgt < 0 {
+			hgt = -hgt
+		}
+		bpp, _ := p.Mod.Mem.ReadU16(hsel, hoff+14)
+		if w <= 0 || hgt <= 0 {
+			return 0, nil
+		}
+		surf := NewSurface(w, hgt)
+		const cbmInit = 4
+		if a.Long(6)&cbmInit != 0 && bpp == 8 {
+			// DIB 每列補齊到 4 bytes；bottom-up 時第 0 列在最後。
+			src := (w + 3) &^ 3
+			bsel, boff := a.Ptr(10)
+			for y := 0; y < hgt; y++ {
+				sy := y
+				if !topDown {
+					sy = hgt - 1 - y
+				}
+				for x := 0; x < w; x++ {
+					v, _ := p.Mod.Mem.ReadU8(bsel, boff+uint16(sy*src+x))
+					surf.Bits[y*surf.Stride+x] = v
+				}
+			}
+		} else if a.Long(6)&cbmInit != 0 {
+			// 非 8bpp 的 DIB 還沒接。畫面會是空的而不會報錯，所以記一筆。
+			p.note("CreateDIBitmap %dx%d bpp=%d：非 8bpp 的初始化尚未實作", w, hgt, bpp)
+		}
+		hbmp := p.Objects.Add(&Object{Kind: ObjBitmap, Bitmap: &Bitmap{
+			Surf: surf, Planes: 1, BPP: 8,
+		}})
+		return uint32(hbmp), nil
+	}
+
+	// GetPaletteEntries(HPALETTE, UINT start, UINT count, PALETTEENTRY far*)
+	// setPaletteEntries 的反向：從邏輯調色盤讀回來。PTO2 在建好 WinG DIB
+	// 之後用它讀回自己剛設的色盤。
+	h["GDI.#363"] = func(p *Process, a Args) (uint32, error) {
+		obj, ok := p.Objects.Get(a.Word(0), ObjPalette)
+		if !ok {
+			return 0, nil
+		}
+		start, count := int(a.Word(2)), int(a.Word(4))
+		sel, off := a.Ptr(6)
+		n := 0
+		for i := 0; i < count; i++ {
+			idx := start + i
+			if idx >= len(obj.Palette.Entries) {
+				break
+			}
+			e := obj.Palette.Entries[idx]
+			b := off + uint16(i*4)
+			_ = p.Mod.Mem.WriteU8(sel, b, e.R)
+			_ = p.Mod.Mem.WriteU8(sel, b+1, e.G)
+			_ = p.Mod.Mem.WriteU8(sel, b+2, e.B)
+			fl := byte(0)
+			if idx < len(obj.Palette.Flags) {
+				fl = obj.Palette.Flags[idx]
+			}
+			_ = p.Mod.Mem.WriteU8(sel, b+3, fl)
+			n++
+		}
+		return uint32(n), nil
+	}
+
+	// SetMapMode(HDC, int)：只記下來。wine-gorgon 一律用 MM_TEXT 的
+	// 一比一座標；遊戲若真的切到別的映射模式，畫面會歪掉而不會報錯，
+	// 所以這裡把非 MM_TEXT(1) 的呼叫記一筆。
+	h["GDI.#3"] = func(p *Process, a Args) (uint32, error) {
+		d, ok := p.dc(a.Word(0))
+		if !ok {
+			return 0, nil
+		}
+		mode := a.Word(2)
+		if mode != 1 {
+			p.note("SetMapMode(%d)：不是 MM_TEXT，座標換算尚未實作", mode)
+		}
+		old := d.MapMode
+		if old == 0 {
+			old = 1
+		}
+		d.MapMode = mode
+		return uint32(old), nil
+	}
+
+	// GetTextFace(HDC, int count, LPSTR)：回目前字體名。
+	h["GDI.#92"] = func(p *Process, a Args) (uint32, error) {
+		d, ok := p.dc(a.Word(0))
+		if !ok {
+			return 0, nil
+		}
+		name := "System"
+		if obj, ok := p.Objects.Get(d.Font, ObjFont); ok && obj.Font != nil && obj.Font.FaceName != "" {
+			name = obj.Font.FaceName
+		}
+		count := int(a.Word(2))
+		sel, off := a.Ptr(4)
+		n := 0
+		for i := 0; i < len(name) && i < count-1; i++ {
+			_ = p.Mod.Mem.WriteU8(sel, off+uint16(i), name[i])
+			n++
+		}
+		if count > 0 {
+			_ = p.Mod.Mem.WriteU8(sel, off+uint16(n), 0)
+		}
+		return uint32(n), nil
+	}
+
 	// GetSystemPaletteEntries(HDC, UINT start, UINT count, PALETTEENTRY far*)
 	h["GDI.#375"] = func(p *Process, a Args) (uint32, error) {
 		start, count := int(a.Word(2)), int(a.Word(4))

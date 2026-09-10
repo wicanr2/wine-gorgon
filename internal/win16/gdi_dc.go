@@ -24,6 +24,7 @@ type DC struct {
 	Pen     uint16
 	Font    uint16
 	Pal     uint16
+	MapMode uint16 // SetMapMode 記下的映射模式；0 與 1 都當 MM_TEXT
 
 	TextColor uint32
 	BkColor   uint32
