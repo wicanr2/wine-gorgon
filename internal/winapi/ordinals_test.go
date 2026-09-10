@@ -200,9 +200,19 @@ func TestArgBytesMatchSignatures(t *testing.T) {
 	}
 }
 
-func TestTableHasExactlyTheCIVSurface(t *testing.T) {
-	if len(Table) != 157 {
-		t.Errorf("表上有 %d 支，預期 157（CIV.EXE 的匯入表面）", len(Table))
+// 表面是「已支援遊戲的聯集」，不是單一遊戲的表面。加新遊戲時更新這幾個常數，
+// 並在註解裡寫清楚數字怎麼來的——這個斷言的用處是擋住隨手加項，
+// 所以數字必須有出處，不能因為測試紅了就往上加。
+const (
+	civSurface = 157 // CIV.EXE：docs/spec/004 §2，兩份獨立解析的交集
+	pto2Adds   = 30  // TEKE2WIN.EXE 帶進來的新項：95 項匯入減去與 CIV 重疊的 64 支，
+	// 再減 KERNEL.#178（__WINFLAGS 是 equate，歸 ValueImports 不進本表）
+)
+
+func TestTableCoversKnownSurfaces(t *testing.T) {
+	if want := civSurface + pto2Adds; len(Table) != want {
+		t.Errorf("表上有 %d 支，預期 %d（CIV.EXE %d ＋ PTO2 新增 %d）",
+			len(Table), want, civSurface, pto2Adds)
 	}
 	for key, f := range Table {
 		if f.Name == "" {

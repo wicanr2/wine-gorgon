@@ -36,6 +36,35 @@ func RegisterKernel(p *Process) {
 
 	h["KERNEL.#30"] = func(p *Process, _ Args) (uint32, error) { return 0, nil } // WaitEvent
 
+	// LockSegment（KERNEL.#23）：把一個段釘住，不讓它被移動或丟棄。
+	// wine-gorgon 的段一載入就固定在位址空間裡，兩件事都不會發生，所以這是 no-op；
+	// 要緊的是回傳值不能是 0，否則呼叫端會當成「鎖不住」。
+	//
+	// 參數 0xFFFF 是「目前的資料段」的慣例。PTO2 第 17 條指令就這樣呼叫
+	// （AX=FFFF），與 Borland 啟動碼在 InitTask 之後鎖 DGROUP 的行為吻合。
+	h["KERNEL.#23"] = func(p *Process, a Args) (uint32, error) {
+		sel := a.Word(0)
+		if sel == 0xFFFF {
+			sel = p.CPU.Seg[cpu.DS]
+		}
+		return uint32(sel), nil
+	}
+
+	// UnlockSegment（KERNEL.#24）成對出現，同樣是 no-op；PTO2 目前沒匯入它，
+	// 撞到再補，不先寫沒有呼叫端的程式碼。
+
+	// GetVersion（KERNEL.#3）：LOWORD 是 Windows 版本，低位元組 major、高位元組 minor
+	// ——Wine 的 GetVersion16 用 MAKEWORD(major, minor)，所以 3.10 是 0x0A03。
+	// HIWORD 是 DOS 版本，反過來排：Wine 的 int21.c 取 DOS major 用
+	// HIBYTE(HIWORD(...))，所以 6.22 是 0x0616。
+	//
+	// 這兩個版本號沒有從原版量過。PTO2 若有版本分支，要回頭量它實際跑在哪個
+	// Windows／DOS 版本，不要讓這裡的預設值決定遊戲走哪條路。
+	h["KERNEL.#3"] = func(p *Process, _ Args) (uint32, error) {
+		const win310, dos622 = 0x0A03, 0x0616
+		return dos622<<16 | win310, nil
+	}
+
 	// GetWinFlags：保護模式 ＋ 386 ＋ 加強模式。這組值決定遊戲走哪條
 	// 記憶體路徑，之後如果發現它靠這個分支，要回頭量原版跑在哪個模式。
 	h["KERNEL.#132"] = func(p *Process, _ Args) (uint32, error) {

@@ -194,6 +194,24 @@ func (p *Process) onInt(c *cpu.CPU, n uint8) (bool, error) {
 			c.SetR16(cpu.DX, uint16(pos>>16))
 			c.SetFlag(cpu.FlagCF, false)
 			return true, nil
+		case 0x25: // 設中斷向量：AL＝中斷號，DS:DX＝處理器
+			if p.IntVectors == nil {
+				p.IntVectors = map[uint8]uint32{}
+			}
+			p.IntVectors[uint8(c.R[cpu.AX])] = uint32(c.Seg[cpu.DS])<<16 | uint32(c.R16(cpu.DX))
+			return true, nil
+
+		case 0x35: // 取中斷向量：AL＝中斷號，回 ES:BX
+			// 不交出控制權——這裡沒有 IVT，也不會去執行程式安裝的處理器。
+			// Borland 啟動碼取向量只是為了結束時放回去，所以只要 25h／35h
+			// 對同一個中斷號進出一致就夠了。真的需要處理器被呼叫時
+			// （例如遊戲自己掛 INT 24h 並期待被觸發），這裡會安靜地不做事，
+			// 那時要回頭把這條路徑補成真的分派。
+			v := p.IntVectors[uint8(c.R[cpu.AX])]
+			c.Seg[cpu.ES] = uint16(v >> 16)
+			c.SetR16(cpu.BX, uint16(v))
+			return true, nil
+
 		case 0x30: // 取 DOS 版本
 			c.SetR16(cpu.AX, 0x1606) // 6.22：AL=6 主版本、AH=22 次版本
 			c.SetR16(cpu.BX, 0)

@@ -40,6 +40,12 @@ type Process struct {
 	// TraceLimit 是 Trace 的上限，避免長跑把記憶體吃光；0 表示不限。
 	TraceLimit int
 
+	// IntVectors 存 INT 21h AH=25h 設進來的中斷向量（鍵是中斷號，值是 seg:off）。
+	// wine-gorgon 沒有真的 IVT，也不會把控制權交給這些處理器；保存它們是因為
+	// Borland 啟動碼的模式是「先 AH=35h 取出、結束時 AH=25h 放回」，
+	// 取回來的值必須跟存進去的一致，否則還原那一步會把亂數寫回去。
+	IntVectors map[uint8]uint32
+
 	// PSP 是那塊放命令列的 selector（`InitTask` 回傳的 ES）。
 	PSP uint16
 
