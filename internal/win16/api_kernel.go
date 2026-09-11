@@ -72,6 +72,17 @@ func RegisterKernel(p *Process) {
 		if size == 0 {
 			size = 1
 		}
+		// **向上對齊到 paragraph（16 bytes）**：Win16 的 global heap 以
+		// paragraph 為粒度配置，`GlobalAlloc(n)` 實際拿到的是 n 對齊之後的
+		// 大小，`GlobalSize` 回的也是那個數。
+		//
+		// 這不是寬鬆化邊界檢查，是補上原本漏掉的粒度：程式讀到請求長度之後、
+		// 同一個 paragraph 之內的位元組，在真 Windows 上讀得到，在這裡卻會
+		// 爆「讀 byte 越界」。civ1 的存檔流程就踩到——`sub_4D473` 裡
+		// `0107:069F` 讀 `[0xA2BA, 0xA2BB)`，而請求的長度正好是 `0xA2BA`。
+		if r := size % 16; r != 0 {
+			size += 16 - r
+		}
 		// GMEM_ZEROINIT 沒設時內容是「未定義」。這裡一律給零：
 		// 「未定義」在對拍工具上必須可重現，不能真的是垃圾。
 		var b *Block
