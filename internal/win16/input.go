@@ -81,11 +81,33 @@ func (p *Process) PostKey(msg uint16, vk uint16) uint16 {
 }
 
 // Click 送一組「按下再放開」。
+//
+// ⚠ **按住與放開落在同一次訊息泵裡**，所以只有「邊緣觸發」的程式看得到它。
+// 有些遊戲不看訊息，而是把按鍵狀態存成一個旗標再輪詢（PTO2 就是：視窗程序
+// 在 WM_LBUTTONDOWN／UP 設清同一個 byte 的 bit0，遊戲迴圈另外用
+// GetCursorPos ＋ 那個 byte 取樣，`RE:cseg11:0x94ee`）。對那種程式要用
+// MouseDown／MouseUp 把按鍵**真的按住一段時間**，中間讓它跑幾十萬條指令。
 func (p *Process) Click(x, y int) uint16 {
 	p.PostMouse(WMMouseMove, x, y, 0)
 	h := p.PostMouse(WMLButtonDown, x, y, 1)
 	p.PostMouse(WMLButtonUp, x, y, 0)
 	return h
+}
+
+// MouseDown 按住左鍵不放。
+func (p *Process) MouseDown(x, y int) uint16 {
+	p.PostMouse(WMMouseMove, x, y, 0)
+	return p.PostMouse(WMLButtonDown, x, y, 1)
+}
+
+// MouseUp 放開左鍵。
+func (p *Process) MouseUp(x, y int) uint16 {
+	return p.PostMouse(WMLButtonUp, x, y, 0)
+}
+
+// MouseMove 只移動游標。輪詢式的程式靠 GetCursorPos 讀它。
+func (p *Process) MouseMove(x, y int) uint16 {
+	return p.PostMouse(WMMouseMove, x, y, 0)
 }
 
 // TypeKey 送一組「按下、字元、放開」。

@@ -17,7 +17,10 @@ import (
 // 所以「跑 N 條指令」才是可重現的單位。用真實時間會讓兩次執行不同。
 //
 //	run 200000        跑 200000 條指令（碰到錯誤就停）
-//	click 300,200     在螢幕座標點一下
+//	click 300,200     在螢幕座標點一下（按下與放開同一拍）
+//	mousedown 300,200 按住左鍵不放；配 run 再 mouseup，給輪詢式的程式用
+//	mouseup 300,200   放開左鍵
+//	mousemove 300,200 只移動游標
 //	key 13            送一個虛擬鍵碼
 //	type 你好         逐字送 WM_CHAR
 //	shot out.png      把整個畫面存成 PNG
@@ -118,6 +121,24 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 		}
 		h := p.Click(x, y)
 		echo(fmt.Sprintf("click %d,%d → 視窗 %04X", x, y, h))
+		return nil
+	case "mousedown", "mouseup", "mousemove":
+		// 輪詢式的程式看的是「現在按鍵有沒有按著」，不是訊息。
+		// 按住、跑一段、再放開，才等於真人按一下（見 Process.Click 的註解）。
+		x, y, err := pair(args[0])
+		if err != nil {
+			return err
+		}
+		var h uint16
+		switch cmd {
+		case "mousedown":
+			h = p.MouseDown(x, y)
+		case "mouseup":
+			h = p.MouseUp(x, y)
+		default:
+			h = p.MouseMove(x, y)
+		}
+		echo(fmt.Sprintf("%s %d,%d → 視窗 %04X", cmd, x, y, h))
 		return nil
 	case "keywin":
 		if len(args) < 2 {

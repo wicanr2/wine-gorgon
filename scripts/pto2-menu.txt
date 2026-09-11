@@ -1,0 +1,6 @@
+# 走到主選單，同時存螢幕與 WinG DIB——兩者的差就是 client 區的位移，
+# 換算「DIB 座標 → 點擊座標」要用它。
+run 3000000
+click 320,240
+run 6000000
+shot menu-screen.png
