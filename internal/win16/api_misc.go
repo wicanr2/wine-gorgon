@@ -64,9 +64,23 @@ func RegisterMisc(p *Process) {
 		return 1, nil
 	}
 
-	h["MMSYSTEM.#701"] = func(p *Process, a Args) (uint32, error) { // mciSendCommand
-		p.note("mciSendCommand(%04X) 回 0（沒有 MCI 裝置）", a.Word(2))
-		return 0, nil
+	// mciSendCommand(UINT devID, UINT msg, DWORD flags, DWORD param)
+	//
+	// **回 0 是「成功」**，不是「沒做」。原本一律回 0 等於告訴遊戲
+	// 「裝置開起來了」，它接著就等播放完成的通知——而我們不送通知，
+	// 所以它一直等。PTO2 因此卡在開場，DIB 停在全黑。
+	//
+	// 這裡改回 MCIERR_INVALID_DEVICE_NAME，讓遊戲走「這台機器沒有 CD／
+	// 影片裝置」那條路。那是原版就有的路徑（玩家不一定放著 CD），
+	// 不是我們捏造的行為。
+	//
+	// 之後真的要對拍開場動畫時，這裡要改成有狀態的實作：MCI_OPEN 發一個
+	// 裝置代號、MCI_PLAY 帶 MCI_NOTIFY 時排一則 MM_MCINOTIFY 給視窗、
+	// MCI_STATUS 回報位置與長度。在那之前不要假裝裝置存在。
+	h["MMSYSTEM.#701"] = func(p *Process, a Args) (uint32, error) {
+		const mcierrInvalidDeviceName = 261
+		p.note("mciSendCommand(%04X) 回 MCIERR_INVALID_DEVICE_NAME（沒有 MCI 裝置）", a.Word(2))
+		return mcierrInvalidDeviceName, nil
 	}
 
 	// GetOpenFileName／GetSaveFileName(OPENFILENAME far*)

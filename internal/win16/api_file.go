@@ -17,6 +17,7 @@ func RegisterFile(p *Process) {
 		name := p.CString(sel, off)
 		fh, err := p.FS.Open(name, int(int16(a.Word(4))))
 		if err != nil {
+			p.note("_lopen 失敗：%v（mode=%04X）", err, a.Word(4))
 			return hfileError, nil
 		}
 		return uint32(fh), nil

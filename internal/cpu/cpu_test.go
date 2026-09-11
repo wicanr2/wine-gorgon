@@ -296,7 +296,11 @@ func TestFarCallHookAndRetFar(t *testing.T) {
 // 未實作的 opcode 必須講出位址——不然接一支新程式時最貴的是找位置。
 func TestUnimplementedOpcodeNamesAddress(t *testing.T) {
 	bus := newBus()
-	bus.seg[tCS][0x10] = 0x64 // FS 前綴，386 才有
+	// 0F FF 是確定不存在的雙位元組 opcode。原本這裡用 0x64（FS 段覆寫前綴），
+	// 但那支後來實作了——測試要驗的是「未實作時報得出位址」這個行為本身，
+	// 所以換一個不會被實作的編碼，而不是把已實作的那支改回去報錯。
+	bus.seg[tCS][0x10] = 0x0F
+	bus.seg[tCS][0x11] = 0xFF
 	c := New(bus)
 	c.Seg[CS], c.IP = tCS, 0x10
 	err := c.Step()
@@ -310,7 +314,7 @@ func TestUnimplementedOpcodeNamesAddress(t *testing.T) {
 	if ce.IP != 0x10 || ce.CS != tCS {
 		t.Errorf("錯誤位址 %04X:%04X，預期 000F:0010", ce.CS, ce.IP)
 	}
-	if !strings.Contains(err.Error(), "64") {
+	if !strings.Contains(err.Error(), "FF") {
 		t.Errorf("錯誤訊息沒提到 opcode：%v", err)
 	}
 }

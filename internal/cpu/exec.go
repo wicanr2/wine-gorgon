@@ -26,8 +26,12 @@ func (c *CPU) Step() error {
 		case 0x3E:
 			c.segOverride = DS
 			continue
-		case 0x64, 0x65:
-			return c.errf(startIP, "FS／GS 段覆寫前綴 %02X（386 以上，未實作）", op)
+		case 0x64: // FS 段覆寫（386）
+			c.segOverride = FS
+			continue
+		case 0x65: // GS 段覆寫（386）
+			c.segOverride = GS
+			continue
 		case 0x66:
 			c.opSize = S32
 			continue
@@ -905,6 +909,29 @@ func (c *CPU) exec0F(ip uint16) error {
 			v = uint32(signExtend(v, srcSz))
 		}
 		c.setReg(m.reg, v, c.opSize)
+		return nil
+	}
+	// PUSH／POP FS／GS（386）。Win16 的程式碼用不到 FS／GS 定址，
+	// 但編譯器的序言會把它們推進堆疊再還原，所以要能進出而不必真的
+	// 支援以它們定址——真的拿來定址時，段覆寫前綴 64／65 仍會報錯。
+	switch op {
+	case 0xA0: // PUSH FS
+		return c.push16(c.Seg[FS])
+	case 0xA1: // POP FS
+		v, err := c.pop16()
+		if err != nil {
+			return c.wrap(ip, err, "POP FS")
+		}
+		c.Seg[FS] = v
+		return nil
+	case 0xA8: // PUSH GS
+		return c.push16(c.Seg[GS])
+	case 0xA9: // POP GS
+		v, err := c.pop16()
+		if err != nil {
+			return c.wrap(ip, err, "POP GS")
+		}
+		c.Seg[GS] = v
 		return nil
 	}
 	return c.errf(ip, "未實作的雙位元組 opcode 0F %02X", op)

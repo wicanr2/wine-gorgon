@@ -129,10 +129,23 @@ func (fs *FileSystem) Exists(dos string) bool {
 func (fs *FileSystem) Open(dos string, mode int) (uint16, error) {
 	write := mode&3 != 0
 	host := fs.hostPath(dos, write)
+	// 程式常用 OF_READWRITE 開只讀來的資料檔——那在真 Windows 上沒問題，
+	// 因為檔案就在可寫的硬碟上。我們把原始資料掛成唯讀，所以這裡要降級：
+	// 沒有 WriteRoot 時，讀寫開檔退回唯讀路徑，讓它至少讀得到。
+	// 不降級的症狀是「遊戲找不到自己的資料檔」，看起來像路徑設錯。
+	// 真的寫下去才會失敗，那時報的是寫入錯誤，指向正確的原因。
+	if host == "" && write && fs.WriteRoot == "" {
+		if ro := fs.hostPath(dos, false); ro != "" {
+			host = ro
+			mode &^= 3 // 降成 OF_READ
+			write = false
+		}
+	}
 	rec := OpenRecord{DOSPath: dos, HostPath: host, Mode: mode}
 	if host == "" {
 		fs.Opened = append(fs.Opened, rec)
-		return 0, fmt.Errorf("找不到 %s", dos)
+		return 0, fmt.Errorf("找不到 %s（Root=%q Prefix=%q WriteRoot=%q write=%v）",
+			dos, fs.Root, fs.Prefix, fs.WriteRoot, write)
 	}
 	flag := os.O_RDONLY
 	if mode&3 == 1 {

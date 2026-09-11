@@ -28,7 +28,7 @@ func (p *Process) Call16(sel, off uint16, args ...uint16) (uint32, error) {
 	c := p.CPU
 	saved := struct {
 		R     [8]uint32
-		Seg   [4]uint16
+		Seg   [6]uint16
 		IP    uint16
 		Flags uint16
 	}{c.R, c.Seg, c.IP, c.Flags}

@@ -61,6 +61,10 @@ const (
 	CS
 	SS
 	DS
+	// FS／GS 是 386 加的。Win16 程式一般不用，但 PTO2 會 PUSH FS
+	// （`0F A0`）——編譯器產生的序言裡有。
+	FS
+	GS
 )
 
 // 旗標位元。
@@ -81,7 +85,7 @@ type CPU struct {
 	// R 是八個 32 位元通用暫存器（EAX…EDI）。16 位元程式只用低半部，
 	// 但 `66` 前綴的指令會動到高半部，所以整個存起來。
 	R     [8]uint32
-	Seg   [4]uint16
+	Seg   [6]uint16
 	IP    uint16
 	Flags uint16
 	Bus   Bus

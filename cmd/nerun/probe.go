@@ -46,7 +46,7 @@ type probeState struct {
 	Steps         uint64    `json:"steps"`
 	CSIP          string    `json:"cs_ip"`
 	Registers     [8]uint32 `json:"registers"`
-	Segments      [4]uint16 `json:"segments"`
+	Segments      [6]uint16 `json:"segments"`
 	Flags         uint16    `json:"flags"`
 	MemoryAddress string    `json:"memory_address"`
 	MemoryHex     string    `json:"memory_hex"`
