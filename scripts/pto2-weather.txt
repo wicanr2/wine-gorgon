@@ -79,7 +79,33 @@ run 400000
 mouseup 320,240
 run 10000000
 
-mousedown 504,291
+# 連推幾個回合，每回合抓一張天候九宮格。
+# EXECUTE 圖示在螢幕 (504,339)；確認框的 YES 在 (406,273)。
+shot w0.png
+mousedown 504,339
 run 400000
-mouseup 504,291
-run 6000000
+mouseup 504,339
+run 2000000
+mousedown 406,273
+run 400000
+mouseup 406,273
+run 20000000
+shot w1.png
+mousedown 504,339
+run 400000
+mouseup 504,339
+run 2000000
+mousedown 406,273
+run 400000
+mouseup 406,273
+run 20000000
+shot w2.png
+mousedown 504,339
+run 400000
+mouseup 504,339
+run 2000000
+mousedown 406,273
+run 400000
+mouseup 406,273
+run 20000000
+shot w3.png
