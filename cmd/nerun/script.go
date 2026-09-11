@@ -27,6 +27,7 @@ import (
 //	crop out.png x,y,w,h  只存畫面的一塊
 //	raw out.bin       把索引原封不動寫出來
 //	print             把目前的視窗列出來
+//	blocks            把位址空間裡的每一塊列出來（selector、名字、大小）
 
 func runScript(p *win16.Process, path string, echo func(string)) error {
 	f, err := os.Open(path)
@@ -322,6 +323,20 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 			}
 			c := p.SysPalette[e.i]
 			echo(fmt.Sprintf("  索引 %3d ×%-6d RGB(%3d,%3d,%3d)", e.i, e.n, c.R, c.G, c.B))
+		}
+		return nil
+	case "blocks":
+		// 把位址空間裡的每一塊列出來（selector、名字、大小）。
+		// 追「這個像素是從哪個 buffer 搬來的」時，光有 selector 沒有用——
+		// 要知道它是哪一份資源。
+		sels := make([]int, 0, 64)
+		for sel := range p.Mod.Mem.Blocks() {
+			sels = append(sels, int(sel))
+		}
+		sort.Ints(sels)
+		for _, sel := range sels {
+			b, _ := p.Mod.Mem.Block(uint16(sel))
+			echo(fmt.Sprintf("  %04X %-24s %d bytes", sel, b.Name, len(b.Data)))
 		}
 		return nil
 	case "print":

@@ -35,6 +35,8 @@ func main() {
 	around := flag.String("around", "", "印出第一次呼叫這支 API 前後的紀錄（例：GDI.BITBLT）")
 	clockUS := flag.Uint("clock-us", 10, "StepClock 每條指令算幾微秒；調小可以讓「繪製本身花掉的虛擬時間」變小")
 	watch := flag.String("watch", "", "執行到這些 CS:IP 就印一行，格式 sel:off[=名字]，逗號分隔（例 002F:5F8F=quit1）")
+	watchMem := flag.String("watch-mem", "", "監看誰寫這塊記憶體，格式 sel:off[+長度]（例 803F:29A0+16）")
+	watchMemDump := flag.String("watch-mem-dump", "", "記憶體監看命中時，把來源那一塊整個存進這個目錄")
 	cd := flag.String("cd", "", "原版 CD 的 .cue；MCI 的 cdaudio 會照它回報音軌數與長度")
 	cdRoot := flag.String("cd-root", "", "光碟資料軌的目錄，唯讀掛成 -cd-drive 指定的磁碟機")
 	cdDrive := flag.String("cd-drive", "D", "光碟掛在哪個磁碟機")
@@ -44,13 +46,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *wingShot, *script, *around, *screen, *openPath, *watch, *cd, *cdRoot, *cdDrive, *collapse, uint32(*clockUS)); err != nil {
+	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *wingShot, *script, *around, *screen, *openPath, *watch, *watchMem, *watchMemDump, *cd, *cdRoot, *cdDrive, *collapse, uint32(*clockUS)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wingShot, script, around, screen, openPath, watch, cd, cdRoot, cdDrive string, collapse bool, clockUS uint32) error {
+func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wingShot, script, around, screen, openPath, watch, watchMem, watchMemDump, cd, cdRoot, cdDrive string, collapse bool, clockUS uint32) error {
 	img, err := ne.Open(path)
 	if err != nil {
 		return err
@@ -149,6 +151,9 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wi
 
 	c := p.CPU
 	if err := setupWatch(c, watch); err != nil {
+		return err
+	}
+	if err := setupMemWatch(p, watchMem, 40, watchMemDump); err != nil {
 		return err
 	}
 	fmt.Printf("進入點 %04X:%04X，DS=%04X SS:SP=%04X:%04X\n",

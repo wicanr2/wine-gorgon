@@ -13,6 +13,12 @@ import "fmt"
 type Memory struct {
 	blocks map[uint16]*Block
 	next   uint16 // 下一個要發的動態 selector
+
+	// OnWrite 在**這一層**的寫入發生時被呼叫。CPU 的寫入有自己的掛鉤
+	// （cpu.OnMemWrite），但 Go 這一側的 API（hmemcpy、_lread、BitBlt）
+	// 直接動 Bus，只有這裡看得到。追「這塊 buffer 是誰填的」時，
+	// 少了這一半就會得到「只有一次寫入」這種假結論。
+	OnWrite func(sel uint16, off, n int, how string)
 }
 
 // Block 是一塊有 selector 的記憶體。
@@ -123,6 +129,9 @@ func (m *Memory) WriteU8(sel uint16, off uint16, v uint8) error {
 	if err != nil {
 		return err
 	}
+	if m.OnWrite != nil {
+		m.OnWrite(sel, int(off), 1, "WriteU8")
+	}
 	b.Data[off] = v
 	return nil
 }
@@ -131,6 +140,9 @@ func (m *Memory) WriteU16(sel uint16, off uint16, v uint16) error {
 	b, err := m.bounds(sel, int(off), 2, "寫 word")
 	if err != nil {
 		return err
+	}
+	if m.OnWrite != nil {
+		m.OnWrite(sel, int(off), 2, "WriteU16")
 	}
 	b.Data[off] = uint8(v)
 	b.Data[off+1] = uint8(v >> 8)
@@ -244,6 +256,11 @@ func (m *Memory) Walk(sel, off uint16, n int, fn func(part []byte) bool) int {
 		part := b.Data[off:]
 		if len(part) > n {
 			part = part[:n]
+		}
+		if m.OnWrite != nil {
+			// Walk 把切片交給呼叫端自己寫，看不到內容；回報範圍就夠
+			// 回答「誰碰了這塊」。
+			m.OnWrite(sel, int(off), len(part), "Walk")
 		}
 		if !fn(part) {
 			return done + len(part)

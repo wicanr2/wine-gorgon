@@ -116,6 +116,13 @@ type CPU struct {
 	// OnWatch 在命中 Watch 的位址時被呼叫，label 是 Watch 裡登記的名字。
 	OnWatch func(c *CPU, label string)
 
+	// OnMemWrite 在**指令**寫記憶體之前被呼叫。用途是回答「誰寫了這個
+	// 像素」——畫面是遊戲自己算好寫進 DIB 的，找繪圖程式碼只能從寫入端追。
+	//
+	// ⚠ 只涵蓋指令的寫入。Go 這一側的 API 處理器（BitBlt 一族）直接動
+	// Bus，不會經過這裡。
+	OnMemWrite func(c *CPU, sel uint16, off uint32, size int, value uint32)
+
 	// 一條指令的解碼狀態
 	segOverride int // -1 表示沒有
 	repPrefix   uint8
@@ -242,6 +249,9 @@ func (c *CPU) busRead(sel uint16, off uint32, sz Size) (uint32, error) {
 }
 
 func (c *CPU) busWrite(sel uint16, off uint32, sz Size, v uint32) error {
+	if c.OnMemWrite != nil {
+		c.OnMemWrite(c, sel, off, int(sz), v)
+	}
 	switch sz {
 	case S8:
 		return c.Bus.WriteU8(sel, off, uint8(v))
