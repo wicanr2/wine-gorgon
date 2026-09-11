@@ -98,11 +98,30 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wi
 			return fmt.Errorf("-cd-root 要配 -cd-drive")
 		}
 		letter := strings.ToUpper(cdDrive)[0]
-		if p.FS.Mounts == nil {
-			p.FS.Mounts = map[byte]string{}
+		st, err := os.Stat(cdRoot)
+		if err != nil {
+			return err
 		}
-		p.FS.Mounts[letter] = cdRoot
-		fmt.Printf("光碟資料軌掛在 %c:（%s）\n", letter, cdRoot)
+		if st.IsDir() {
+			if p.FS.Mounts == nil {
+				p.FS.Mounts = map[byte]string{}
+			}
+			p.FS.Mounts[letter] = cdRoot
+			fmt.Printf("光碟資料軌掛在 %c:（目錄 %s）\n", letter, cdRoot)
+		} else {
+			// 檔案就當成光碟映像。純 .iso 與 MODE1/2352 的 .bin 都吃，
+			// 版面是量出來的（見 OpenISO）。
+			iso, err := win16.OpenISO(cdRoot)
+			if err != nil {
+				return err
+			}
+			defer iso.Close()
+			if p.FS.ISOMounts == nil {
+				p.FS.ISOMounts = map[byte]*win16.ISO{}
+			}
+			p.FS.ISOMounts[letter] = iso
+			fmt.Printf("光碟資料軌掛在 %c:（映像 %s）\n", letter, cdRoot)
+		}
 	}
 	defer p.FS.CloseAll()
 	if n, err := p.LoadInstalledFonts(); err == nil && n > 0 {

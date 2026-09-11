@@ -2,6 +2,7 @@ package win16
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,6 +30,10 @@ type FileSystem struct {
 	// 磁碟機就過不去。這些掛載沒有 Prefix、永遠不可寫。
 	Mounts map[byte]string
 
+	// ISOMounts 和 Mounts 一樣是額外的磁碟機，只是後面接的是一份光碟
+	// 映像而不是主機目錄。同一個代號兩邊都有時以映像優先。
+	ISOMounts map[byte]*ISO
+
 	files map[uint16]*openFile
 	next  uint16
 
@@ -45,8 +50,14 @@ type OpenRecord struct {
 	OK       bool
 }
 
+// DiskFile 是一個開著的檔。ISO 上的檔案沒有 *os.File，但 Read／Seek
+// 的語意一樣，所以這一層用介面。寫入在唯讀來源上會回錯誤。
+type DiskFile interface {
+	io.ReadWriteSeeker
+}
+
 type openFile struct {
-	f    *os.File
+	f    DiskFile
 	name string
 }
 
@@ -135,8 +146,28 @@ func resolveCase(root, rel string) string {
 	return cur
 }
 
+// isoEntryFor 找出某個 DOS 路徑對應的 ISO 檔案；不是 ISO 掛載就回 false。
+func (fs *FileSystem) isoEntryFor(dos string) (*ISO, isoEntry, bool) {
+	up := strings.ToUpper(dos)
+	if len(up) < 2 || up[1] != ':' {
+		return nil, isoEntry{}, false
+	}
+	iso, ok := fs.ISOMounts[up[0]]
+	if !ok || up[0] == fs.Drive {
+		return nil, isoEntry{}, false
+	}
+	e, ok := iso.Lookup(up[2:])
+	if !ok || e.IsDir {
+		return nil, isoEntry{}, false
+	}
+	return iso, e, true
+}
+
 // Exists 回答一個 DOS 路徑存不存在（不開檔）。
 func (fs *FileSystem) Exists(dos string) bool {
+	if _, _, ok := fs.isoEntryFor(dos); ok {
+		return true
+	}
 	if p := fs.hostPath(dos, false); p != "" {
 		_, err := os.Stat(p)
 		return err == nil
@@ -147,6 +178,19 @@ func (fs *FileSystem) Exists(dos string) bool {
 // Open 開一個檔；mode 是 OpenFile 的 OF_* 低兩位（0 讀、1 寫、2 讀寫）。
 func (fs *FileSystem) Open(dos string, mode int) (uint16, error) {
 	write := mode&3 != 0
+	// 光碟映像先問。它是唯讀的，所以讀寫開檔一律降級成唯讀——理由和
+	// 下面唯讀目錄那一段相同。
+	if iso, e, ok := fs.isoEntryFor(dos); ok {
+		fs.Opened = append(fs.Opened, OpenRecord{
+			DOSPath: dos, HostPath: "ISO:" + e.Name, Mode: mode &^ 3, OK: true})
+		h := fs.next
+		fs.next++
+		fs.files[h] = &openFile{
+			f:    &isoFile{iso: iso, base: int64(e.LBA) * isoLogicalSector, size: int64(e.Size)},
+			name: e.Name,
+		}
+		return h, nil
+	}
 	host := fs.hostPath(dos, write)
 	// 程式常用 OF_READWRITE 開只讀來的資料檔——那在真 Windows 上沒問題，
 	// 因為檔案就在可寫的硬碟上。我們把原始資料掛成唯讀，所以這裡要降級：
@@ -206,7 +250,7 @@ func (fs *FileSystem) Create(dos string) (uint16, error) {
 }
 
 // File 取一個開著的檔。
-func (fs *FileSystem) File(h uint16) (*os.File, bool) {
+func (fs *FileSystem) File(h uint16) (DiskFile, bool) {
 	of, ok := fs.files[h]
 	if !ok {
 		return nil, false
@@ -220,7 +264,9 @@ func (fs *FileSystem) Close(h uint16) bool {
 	if !ok {
 		return false
 	}
-	_ = of.f.Close()
+	if c, ok := of.f.(io.Closer); ok {
+		_ = c.Close()
+	}
 	delete(fs.files, h)
 	return true
 }

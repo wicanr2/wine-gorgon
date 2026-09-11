@@ -244,7 +244,7 @@ func RegisterUserWindow(p *Process) {
 	// 會讓遊戲看起來只是「沒反應」，查起來完全沒有線索。
 	h["USER.#291"] = func(p *Process, a Args) (uint32, error) {
 		id := int(int16(a.Word(0)))
-		off, sel := a.Word(2), a.Word(4)
+		sel, off := a.Ptr(2)
 		handle := p.SetHook(id, sel, off, a.Word(8))
 		if id != WHGetMessage {
 			p.note("SetWindowsHookEx：型別 %d 登記了但不會被派送（%04X:%04X）", id, sel, off)

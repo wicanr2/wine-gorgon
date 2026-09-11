@@ -3,6 +3,7 @@ package win16
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,12 +174,17 @@ func (p *Process) LoadFontFile(dosPath string) (int, error) {
 	f, _ := p.FS.File(h)
 	defer p.FS.Close(h)
 
-	st, err := f.Stat()
+	// 用 Seek 量長度而不是 Stat：來源可能是光碟映像裡的一段，
+	// 那種檔案沒有 os.FileInfo。
+	size, err := f.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, err
 	}
-	raw := make([]byte, st.Size())
-	if _, err := f.Read(raw); err != nil {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return 0, err
+	}
+	raw := make([]byte, size)
+	if _, err := io.ReadFull(f, raw); err != nil {
 		return 0, err
 	}
 	return p.loadFontImage(raw)

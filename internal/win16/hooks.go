@@ -51,10 +51,12 @@ func (p *Process) callGetMessageHook(msgSel, msgOff, remove uint16) error {
 		if h.ID != WHGetMessage {
 			continue
 		}
+		// far 指標要先推段再推位移：pascal 由左往右推，而後推的落在低位址，
+		// 所以 `les bx,[bp+6]` 讀到的低位字必須是位移。
 		if _, err := p.Call16(h.Sel, h.Off,
 			0,      // nCode = HC_ACTION
 			remove, // wParam：PM_REMOVE 與否
-			msgOff, uint16(msgSel)); err != nil {
+			msgSel, msgOff); err != nil {
 			return err
 		}
 	}

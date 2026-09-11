@@ -69,7 +69,7 @@ func TestWriteRootShadowsRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	f, _ := fs.File(h)
-	_, _ = f.WriteString("new")
+	_, _ = f.Write([]byte("new"))
 	fs.Close(h)
 
 	if b, _ := os.ReadFile(filepath.Join(root, "A.DAT")); string(b) != "orig" {
