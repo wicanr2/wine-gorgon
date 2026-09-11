@@ -1,0 +1,76 @@
+# 走到戰略畫面：主選單 → NEW GAME → 劇本 0（夏威夷戰役）→ 日本 → 開始。
+#
+# 這是可重用的前置腳本；要對拍某個控制項就 cat 這一份再接自己的點擊。
+#
+# 座標換算：WinG DIB 的 (dx,dy) 落在螢幕 (dx-1, dy+39)，那是 client 區的原點
+# （量法：把 DIB 的一整列拿去螢幕圖裡找）。主選單三格在 DIB 上的中線是
+# NEW GAME y=188、LOAD GAME y=212、LISTEN TO MUSIC y=236，框寬 x 256..423。
+#
+# **要按住再放開**：PTO2 不看滑鼠訊息，它在視窗程序裡把左鍵記成一個 bit，
+# 遊戲迴圈另外用 GetCursorPos ＋ 那個 bit 取樣（RE:cseg11:0x94ee）。
+# click 的按下與放開落在同一次訊息泵裡，那個 bit 還沒被讀到就被清掉了。
+run 3000000
+mousedown 320,240
+run 200000
+mouseup 320,240
+run 6000000
+mousedown 339,227
+run 400000
+mouseup 339,227
+run 4000000
+
+# 劇本 0「The Day of Infamy」（12/8/41，夏威夷戰役）。
+# 十列的 DIB 中線：0=104 1=122 2=143 3=164 4=183 5=203 6=222，間距約 20。
+mousedown 299,143
+run 400000
+mouseup 299,143
+run 6000000
+run 6000000
+
+# 劇本說明的 START 鈕：DIB 上約 (395,345)。
+mousedown 394,384
+run 400000
+mouseup 394,384
+run 8000000
+run 8000000
+
+# 劇本 0 **沒有陣營選擇**：START 之後直接問「Are you ready to start the game?」。
+# （劇本 1 在這裡會先問 Which will you play?；夏威夷戰役只能玩日方。）
+# YES 在 DIB 約 (432,220)。
+mousedown 431,259
+run 400000
+mouseup 431,259
+run 10000000
+run 10000000
+
+# 「…has a report on the current situation. Will you listen to it?」選 NO。
+mousedown 575,289
+run 400000
+mouseup 575,289
+run 10000000
+run 10000000
+
+# 劇本 0 的開場演出：山本長官三頁（▼ 點一下換頁），接宣戰詔書插圖。
+mousedown 320,240
+run 400000
+mouseup 320,240
+run 6000000
+mousedown 320,240
+run 400000
+mouseup 320,240
+run 6000000
+mousedown 320,240
+run 400000
+mouseup 320,240
+run 8000000
+mousedown 320,240
+run 400000
+mouseup 320,240
+run 8000000
+
+# 宣戰詔書插圖下方的 CONFIRM（DIB 約 (480,332)）→ 戰略畫面，12/8/1941 JPN Move Phase。
+mousedown 479,371
+run 400000
+mouseup 479,371
+run 8000000
+run 8000000

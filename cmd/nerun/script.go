@@ -21,10 +21,12 @@ import (
 //	mousedown 300,200 按住左鍵不放；配 run 再 mouseup，給輪詢式的程式用
 //	mouseup 300,200   放開左鍵
 //	mousemove 300,200 只移動游標
+//	rmousedown／rmouseup 300,200  右鍵，用法同 mousedown／mouseup
 //	key 13            送一個虛擬鍵碼
 //	type 你好         逐字送 WM_CHAR
 //	shot out.png      把整個畫面存成 PNG
 //	crop out.png x,y,w,h  只存畫面的一塊
+//	wing out.png [x,y,w,h] 存 WinG DIB（遊戲直接寫的那塊），可只存一塊
 //	raw out.bin       把索引原封不動寫出來
 //	print             把目前的視窗列出來
 //	blocks            把位址空間裡的每一塊列出來（selector、名字、大小）
@@ -123,7 +125,7 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 		h := p.Click(x, y)
 		echo(fmt.Sprintf("click %d,%d → 視窗 %04X", x, y, h))
 		return nil
-	case "mousedown", "mouseup", "mousemove":
+	case "mousedown", "mouseup", "mousemove", "rmousedown", "rmouseup":
 		// 輪詢式的程式看的是「現在按鍵有沒有按著」，不是訊息。
 		// 按住、跑一段、再放開，才等於真人按一下（見 Process.Click 的註解）。
 		x, y, err := pair(args[0])
@@ -136,6 +138,10 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 			h = p.MouseDown(x, y)
 		case "mouseup":
 			h = p.MouseUp(x, y)
+		case "rmousedown":
+			h = p.RMouseDown(x, y)
+		case "rmouseup":
+			h = p.RMouseUp(x, y)
 		default:
 			h = p.MouseMove(x, y)
 		}
@@ -206,6 +212,23 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 		}
 		echo(fmt.Sprintf("peek %04X:%04X = % 02X", sel, off, b))
 		return nil
+	case "wing":
+		// 存 WinG DIB（遊戲自己畫的那塊記憶體），不是螢幕合成結果。
+		// 可以再給一個矩形只存一塊：PTO2 的 DIB 是 640×416，但遊戲只畫上面
+		// 640×400（寬高表在 0397:2010），下面 16 列是 client 區的副產物。
+		s := largestWinG(p)
+		if s == nil {
+			return fmt.Errorf("還沒有 WinG DIB")
+		}
+		if len(args) > 1 {
+			x, y, w, h, err := quad(args[1])
+			if err != nil {
+				return err
+			}
+			s = s.SubSurface(x, y, w, h)
+		}
+		echo(fmt.Sprintf("wing → %s", args[0]))
+		return p.SavePNG(args[0], s)
 	case "raw":
 		return p.SaveIndexRaw(args[0], p.Screen)
 	case "crop":

@@ -2,3 +2,4 @@ workplace/
 *.EXE
 *.exe
 out/
+scripts/.gen/

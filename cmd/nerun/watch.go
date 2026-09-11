@@ -84,11 +84,22 @@ func setupMemWatch(p *win16.Process, spec string, limit int, dumpDir string) err
 		}
 		length, spec = n, spec[:i]
 	}
-	sel, off, err := parseSelOff(spec)
-	if err != nil {
-		return err
+	// offset 可以超過 64 KiB：PTO2 用 32 位元 EDI 走完整張 WinG DIB
+	// （段界到整塊結尾，見 CPUBus），DIB 上 y≥103 的像素都在 0x10000 之後。
+	parts := strings.SplitN(spec, ":", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("記憶體監看 %q 要寫成 sel:off", spec)
 	}
-	lo, hi := uint32(off), uint32(off)+uint32(length)
+	sel64, err := strconv.ParseUint(parts[0], 16, 16)
+	if err != nil {
+		return fmt.Errorf("記憶體監看 %q 的 selector：%w", spec, err)
+	}
+	off64, err := strconv.ParseUint(parts[1], 16, 32)
+	if err != nil {
+		return fmt.Errorf("記憶體監看 %q 的 offset：%w", spec, err)
+	}
+	sel := uint16(sel64)
+	lo, hi := uint32(off64), uint32(off64)+uint32(length)
 	seen := map[uint32]int{}
 	shown := 0
 	c.OnMemWrite = func(c *cpu.CPU, s uint16, o uint32, size int, v uint32) {

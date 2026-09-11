@@ -248,12 +248,7 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wi
 	if wingShot != "" {
 		// WinG DIB 是遊戲直接寫的那塊記憶體——畫面的真值在這裡，
 		// 不在螢幕合成結果。多塊時存最大的那一塊（整個畫面的那一塊）。
-		var best *win16.Surface
-		for s := range p.WinGBits {
-			if best == nil || s.W*s.H > best.W*best.H {
-				best = s
-			}
-		}
+		best := largestWinG(p)
 		if best == nil {
 			fmt.Println("沒有 WinG DIB 可存")
 		} else if err := p.SavePNG(wingShot, best); err != nil {
@@ -374,4 +369,15 @@ func parseSize(s string) (int, int, error) {
 	}
 	h, err := strconv.Atoi(s[i+1:])
 	return w, h, err
+}
+
+// largestWinG 回傳面積最大的那塊 WinG DIB（整個畫面的那一塊）；沒有就回 nil。
+func largestWinG(p *win16.Process) *win16.Surface {
+	var best *win16.Surface
+	for s := range p.WinGBits {
+		if best == nil || s.W*s.H > best.W*best.H {
+			best = s
+		}
+	}
+	return best
 }

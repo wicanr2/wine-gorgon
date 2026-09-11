@@ -105,6 +105,18 @@ func (p *Process) MouseUp(x, y int) uint16 {
 	return p.PostMouse(WMLButtonUp, x, y, 0)
 }
 
+// RMouseDown 按住右鍵不放。PTO2 的視窗程序把右鍵記在同一個 byte 的 bit1，
+// 遊戲迴圈拿它當「取消」（`RE:cseg11:0x94ee` 回傳的旗標）。
+func (p *Process) RMouseDown(x, y int) uint16 {
+	p.PostMouse(WMMouseMove, x, y, 0)
+	return p.PostMouse(WMRButtonDown, x, y, 2)
+}
+
+// RMouseUp 放開右鍵。
+func (p *Process) RMouseUp(x, y int) uint16 {
+	return p.PostMouse(WMRButtonUp, x, y, 0)
+}
+
 // MouseMove 只移動游標。輪詢式的程式靠 GetCursorPos 讀它。
 func (p *Process) MouseMove(x, y int) uint16 {
 	return p.PostMouse(WMMouseMove, x, y, 0)
