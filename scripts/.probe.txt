@@ -1,0 +1,86 @@
+# 走到戰略畫面：主選單 → NEW GAME → 劇本 1（開戰前夜）→ 日本 → 開始。
+#
+# 這是可重用的前置腳本；要對拍某個控制項就 cat 這一份再接自己的點擊。
+#
+# 座標換算：WinG DIB 的 (dx,dy) 落在螢幕 (dx-1, dy+39)，那是 client 區的原點
+# （量法：把 DIB 的一整列拿去螢幕圖裡找）。主選單三格在 DIB 上的中線是
+# NEW GAME y=188、LOAD GAME y=212、LISTEN TO MUSIC y=236，框寬 x 256..423。
+#
+# **要按住再放開**：PTO2 不看滑鼠訊息，它在視窗程序裡把左鍵記成一個 bit，
+# 遊戲迴圈另外用 GetCursorPos ＋ 那個 bit 取樣（RE:cseg11:0x94ee）。
+# click 的按下與放開落在同一次訊息泵裡，那個 bit 還沒被讀到就被清掉了。
+run 3000000
+mousedown 320,240
+run 200000
+mouseup 320,240
+run 6000000
+mousedown 339,227
+run 400000
+mouseup 339,227
+run 4000000
+
+# 劇本 1「The Brink of War」（11/26/41，開戰前夜）。
+# 十列的 DIB 中線：0=104 1=122 2=143 3=164 4=183 5=203 6=222，間距約 20。
+mousedown 299,161
+run 400000
+mouseup 299,161
+run 6000000
+run 6000000
+
+# 劇本說明的 START 鈕：DIB 上約 (395,345)。
+mousedown 394,384
+run 400000
+mouseup 394,384
+run 8000000
+run 8000000
+
+# 「Which will you play?」四格的 DIB 中線：U.S.A.=181 JAPAN=205
+# BOTH SIDES=228 DEMO GAME=251，間距 24，框寬 x 235..404。選日本。
+mousedown 309,244
+run 400000
+mouseup 309,244
+run 8000000
+run 8000000
+
+# 「Are you ready to start the game?」的 YES：DIB 約 (432,220)。
+mousedown 431,259
+run 400000
+mouseup 431,259
+run 10000000
+run 10000000
+
+# 「…has a report on the current situation. Will you listen to it?」
+# 選 NO 直接進戰略畫面（YES 是簡報，另外抓）。NO 在 DIB 約 (576,250)。
+mousedown 575,289
+run 400000
+mouseup 575,289
+run 10000000
+run 10000000
+
+# 將領介紹卡（▼ 表示點一下繼續），連點幾次進戰略畫面。
+mousedown 320,240
+run 400000
+mouseup 320,240
+run 6000000
+mousedown 320,240
+run 400000
+mouseup 320,240
+run 6000000
+mousedown 320,240
+run 400000
+mouseup 320,240
+run 8000000
+mousedown 320,240
+run 400000
+mouseup 320,240
+run 8000000
+mousedown 320,240
+run 400000
+mouseup 320,240
+run 10000000
+
+# 改點 ORDER 的**圖示**（DIB x≈505）而不是文字：DOS 版截圖裡游標就在圖示上。
+mousedown 504,195
+run 400000
+mouseup 504,195
+run 6000000
