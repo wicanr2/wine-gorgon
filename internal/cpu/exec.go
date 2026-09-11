@@ -408,7 +408,11 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		if err != nil {
 			return c.wrap(ip, err, "ModRM")
 		}
-		return c.wrap(ip, c.writeOp(m.rm, uint32(c.Seg[m.reg&3]), S16), "寫回")
+		s, err := c.segIndex(ip, m.reg)
+		if err != nil {
+			return err
+		}
+		return c.wrap(ip, c.writeOp(m.rm, uint32(c.Seg[s]), S16), "寫回")
 	case 0x8D: // LEA：只算位址，不碰記憶體
 		m, err := c.decodeModRM()
 		if err != nil {
@@ -428,7 +432,11 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		if err != nil {
 			return c.wrap(ip, err, "讀運算元")
 		}
-		c.Seg[m.reg&3] = uint16(v)
+		s, err := c.segIndex(ip, m.reg)
+		if err != nil {
+			return err
+		}
+		c.Seg[s] = uint16(v)
 		return nil
 	case 0x8F: // POP r/m
 		m, err := c.decodeModRM()
@@ -1102,4 +1110,20 @@ func (c *CPU) group45(sz Size, ip uint16) error {
 		return c.wrap(ip, c.pushSize(v, sz), "push")
 	}
 	return c.errf(ip, "群組 5 的 reg=%d 未定義", m.reg)
+}
+
+// segIndex 把 ModRM 的 reg 欄位換成段暫存器索引。
+//
+// **不能用 `reg&3`**。那是只有 ES／CS／SS／DS 四個段暫存器時的寫法，
+// 加上 FS（4）與 GS（5）之後，`MOV FS, AX` 會被遮成 ES、
+// `MOV GS, AX` 會被遮成 **CS**——後者直接改掉程式流程，
+// 而且不會報錯，只會跳到別的地方執行。
+//
+// PTO2 的 EXE 裡有上百處設 FS／GS 的指令，這個遮罩會讓它們全部寫錯地方。
+// reg=6／7 在 386 沒有對應的段暫存器，是無效編碼。
+func (c *CPU) segIndex(ip uint16, reg int) (int, error) {
+	if reg > GS {
+		return 0, c.errf(ip, "段暫存器編碼 %d 無效（只有 0..5）", reg)
+	}
+	return reg, nil
 }
