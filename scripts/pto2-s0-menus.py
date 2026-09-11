@@ -67,6 +67,18 @@ CONTROLS = {
 DEEP = {
     ("info", "unit"):   ["navy_af", "army_af", "marines", "army_div", "submarine"],
     ("info", "nation"): ["data", "navy", "army", "new_arms"],
+    # ARMAMENT 那一輪量到的：大多數子項先問國別
+    ("armament", "in_service"): ["japan", "usa"],
+    ("armament", "building"):   ["warship", "submarine"],
+    ("armament", "warship"):    ["japan", "usa", "other"],
+    ("armament", "aircraft"):   ["japan", "usa", "other"],
+    ("armament", "submarine"):  ["japan", "usa"],
+}
+# 第三層分三支跑：一支卡在整頁畫面時不會拖垮另外兩支
+DEEP_GROUPS = {
+    "deep1": [("info", "unit"), ("info", "nation")],
+    "deep2": [("armament", "in_service"), ("armament", "building"), ("armament", "submarine")],
+    "deep3": [("armament", "warship"), ("armament", "aircraft")],
 }
 ICON_X, ITEM_X, Y0, DY = 504, 584, 195, 24
 OUT = "/out/s0menu"
@@ -197,6 +209,85 @@ def arms_script():
     return s
 
 
+# EXECUTE 的兩個確認框（execute.png／execute_back.png 量的 DIB 座標）：
+# 第一框「Your orders will be executed. Is this OK?」YES (405,235)、NO (471,235)；
+# 右鍵之後跳出第二框「Will you advance the game?」YES (300,235)、NO (368,235)。
+# 右鍵在第一框不是單純取消，所以要明確點按鈕各走一次。
+EXEC1_YES, EXEC1_NO = (405, 235), (471, 235)
+EXEC2_YES, EXEC2_NO = (300, 235), (368, 235)
+
+
+def execute2_script():
+    k, _ = MENUS["execute"]
+    y = Y0 + DY * k
+    def at(p, right=False):
+        return press(p[0] - 1, p[1] + 39, right=right)
+    s = "\n# ── execute：第一框 NO ──\n"
+    s += reset() + press(ICON_X, y) + wing("execute2_dialog1")
+    s += at(EXEC1_NO) + wing("execute2_dialog1_no")
+    s += "\n# ── execute：第一框 YES → 第二框 NO ──\n"
+    s += reset() + press(ICON_X, y) + at(EXEC1_YES) + wing("execute2_dialog1_yes")
+    s += at(EXEC2_NO) + wing("execute2_dialog2_no")
+    return s
+
+
+# 第一輪控制項量到：底列 5 鈕是地圖圖層**開關**，狀態一直留著、右鍵不還原；
+# 小地圖與方位盤會捲動視窗。所以第二輪每一個都「點 → 存 → 還原 → 存」，
+# 會捲動的排最後。世界地圖是整頁畫面，上排 FLEET／RESOURCE／FORCE／NET／
+# BASE／END 各 80 寬（tool_world.png 量的），END 回戰略畫面。
+WORLD_BUTTONS = [("fleet", 40), ("resource", 120), ("force", 200), ("net", 280), ("base", 360)]
+WORLD_END = (440, 12)
+
+
+def controls2_script():
+    def at(dx, dy, right=False):
+        return press(dx - 1, dy + 39, right=right)
+    s = ""
+    # 不捲動、不開關的：艦隊面板、地圖物件、右欄裝飾
+    for name in ["fleet_title", "fleet_cell01", "fleet_up", "fleet_down",
+                 "map_kure", "map_tokyo", "officer", "date", "weather_grid",
+                 "compass_clock"]:
+        dx, dy = CONTROLS[name]
+        s += f"\n# ── {name} ──\n" + reset() + at(dx, dy) + wing(f"c2_{name}")
+        s += at(dx, dy, right=True) + wing(f"c2_{name}_back")
+    # 開關：點一下、存，再點一下還原、存
+    for name in ["tool_route", "tool_base", "tool_weather", "tool_scroll"]:
+        dx, dy = CONTROLS[name]
+        s += f"\n# ── {name}（開關）──\n" + reset() + at(dx, dy) + wing(f"c2_{name}")
+        s += at(dx, dy) + wing(f"c2_{name}_again")
+    # 世界地圖：開、五個子鈕各點一次、END
+    dx, dy = CONTROLS["tool_world"]
+    s += "\n# ── tool_world ──\n" + reset() + at(dx, dy) + wing("c2_tool_world")
+    for name, bx in WORLD_BUTTONS:
+        s += at(bx, 12) + wing(f"c2_world_{name}")
+        s += at(bx, 12, right=True) + wing(f"c2_world_{name}_back")
+    s += at(*WORLD_END) + wing("c2_world_end")
+    # 會捲動的排最後：方位盤 NW、再 SE 還原；小地圖
+    for name, (dx, dy) in [("compass_nw", CONTROLS["compass_nw"]), ("compass_se", (471, 348)),
+                           ("minimap", CONTROLS["minimap"])]:
+        s += f"\n# ── {name} ──\n" + reset() + at(dx, dy) + wing(f"c2_{name}")
+    return s
+
+
+# OPTION 第二輪量到：SET-UP 面板（136,80)-(360,296) 右鍵關不掉，要按 ENTER
+# (280,264)-(352,288)；DIFFICULTY 矩陣右下也是 ENTER（R194）。
+SETUP_ENTER = (316, 276)
+
+
+def option2_script(diff_enter):
+    k, items = MENUS["option"]
+    y = Y0 + DY * k
+    def at(p, right=False):
+        return press(p[0] - 1, p[1] + 39, right=right)
+    s = "\n# ── option → set-up，ENTER 關 ──\n"
+    s += reset() + press(ICON_X, y) + press(ITEM_X, Y0 + DY * items.index("setup"))
+    s += wing("option_setup") + at(SETUP_ENTER) + wing("option_setup_enter")
+    s += "\n# ── option → difficulty ──\n"
+    s += reset() + press(ICON_X, y) + press(ITEM_X, Y0 + DY * items.index("difficulty"))
+    s += wing("option_difficulty") + at(diff_enter) + wing("option_difficulty_enter")
+    return s + execute2_script()
+
+
 def control_script(name):
     dx, dy = CONTROLS[name]
     x, y = dx - 1, dy + 39
@@ -223,6 +314,18 @@ def main():
             for menu, item in DEEP:
                 out += deep_script(menu, item)
             out += arms_script()
+        elif n == "controls2":
+            out += controls2_script()
+        elif n.startswith("option2@"):
+            x, y = map(int, n.split("@")[1].split(","))
+            out += option2_script((x, y))
+        elif n == "execute2":
+            out += execute2_script()
+        elif n in DEEP_GROUPS:
+            for menu, item in DEEP_GROUPS[n]:
+                out += deep_script(menu, item)
+            if n == "deep1":
+                out += arms_script()
         elif n in CONTROLS:
             out += control_script(n)
         else:

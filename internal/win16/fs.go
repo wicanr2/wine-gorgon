@@ -192,6 +192,20 @@ func (fs *FileSystem) Open(dos string, mode int) (uint16, error) {
 		return h, nil
 	}
 	host := fs.hostPath(dos, write)
+	// 有可寫目錄時的讀寫開檔：可寫目錄裡還沒有、原始目錄裡有的檔，先複製過去
+	// 再開（copy-on-write）。真 Windows 上資料檔就在可寫的硬碟上，遊戲用
+	// OF_READWRITE 開它是正常的（PTO2 開 RUMAP.TK2 就是）；不複製的話，
+	// 讀寫開檔會指到可寫目錄裡不存在的檔，遊戲一開局就找不到自己的資料。
+	// 原始目錄永遠不會被寫到。
+	if write && fs.WriteRoot != "" && host != "" {
+		if _, err := os.Stat(host); err != nil {
+			if ro := fs.hostPath(dos, false); ro != "" && ro != host {
+				if err := copyHostFile(ro, host); err != nil {
+					return 0, fmt.Errorf("複製 %s 到可寫目錄失敗：%w", dos, err)
+				}
+			}
+		}
+	}
 	// 程式常用 OF_READWRITE 開只讀來的資料檔——那在真 Windows 上沒問題，
 	// 因為檔案就在可寫的硬碟上。我們把原始資料掛成唯讀，所以這裡要降級：
 	// 沒有 WriteRoot 時，讀寫開檔退回唯讀路徑，讓它至少讀得到。
@@ -291,4 +305,16 @@ func (fs *FileSystem) Missing() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// copyHostFile 把 src 複製成 dst（需要時建立上層目錄）。
+func copyHostFile(src, dst string) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, 0o644)
 }

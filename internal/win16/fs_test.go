@@ -91,6 +91,40 @@ func TestWriteRootShadowsRoot(t *testing.T) {
 	fs.Close(h)
 }
 
+// 有可寫目錄時，讀寫開一個只在原始目錄裡的檔：要複製到可寫目錄再開，
+// 寫入落在副本，原始檔不動。PTO2 用 OF_READWRITE 開 RUMAP.TK2，沒有這一步
+// 的症狀是「給了 -write 之後遊戲一開局就找不到 RUMAP.TK2」。
+func TestReadWriteOpenCopiesOnWrite(t *testing.T) {
+	root, wr := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "RUMAP.TK2"), []byte("orig"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs := NewFileSystem(root, "PTO2")
+	fs.WriteRoot = wr
+	h, err := fs.Open(`RUMAP.TK2`, 2) // OF_READWRITE
+	if err != nil {
+		t.Fatalf("讀寫開檔失敗：%v", err)
+	}
+	f, _ := fs.File(h)
+	buf := make([]byte, 4)
+	if n, _ := f.Read(buf); string(buf[:n]) != "orig" {
+		t.Fatalf("讀到 %q，預期原始內容", buf[:n])
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("NEW!")); err != nil {
+		t.Fatal(err)
+	}
+	fs.Close(h)
+	if b, _ := os.ReadFile(filepath.Join(root, "RUMAP.TK2")); string(b) != "orig" {
+		t.Fatalf("原始檔被改了：%q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(wr, "RUMAP.TK2")); string(b) != "NEW!" {
+		t.Fatalf("可寫目錄裡的副本是 %q", b)
+	}
+}
+
 func TestMissingListsOnlyFailures(t *testing.T) {
 	fs := NewFileSystem(t.TempDir(), "CIV")
 	_, _ = fs.Open("NOPE.DAT", 0)
