@@ -288,6 +288,21 @@ def option2_script(diff_enter):
     return s + execute2_script()
 
 
+def base_op_script(yes):
+    """ARMS 的 END 會問 Are you satisfied with the production?，答 YES 才離開；
+    之後才能抓 BASE OP.（前兩輪都卡在造艦畫面）。"""
+    k, items = MENUS["assign"]
+    y = Y0 + DY * k
+    ex, ey = ARMS_END[0] - 1, ARMS_END[1] + 39
+    s = "\n# ── assign → arms → END → YES，再抓 base op. ──\n"
+    s += reset() + press(ICON_X, y) + press(ITEM_X, Y0 + DY * items.index("arms"))
+    s += press(ex, ey) + wing("assign_arms_end") + press(yes[0] - 1, yes[1] + 39) + wing("assign_arms_end_yes")
+    by = Y0 + DY * items.index("base_op")
+    s += reset() + press(ICON_X, y) + press(ITEM_X, by) + wing("assign_base_op")
+    s += press(ITEM_X, by, right=True) + wing("assign_base_op_back")
+    return s
+
+
 def control_script(name):
     dx, dy = CONTROLS[name]
     x, y = dx - 1, dy + 39
@@ -319,6 +334,9 @@ def main():
         elif n.startswith("option2@"):
             x, y = map(int, n.split("@")[1].split(","))
             out += option2_script((x, y))
+        elif n.startswith("baseop@"):
+            x, y = map(int, n.split("@")[1].split(","))
+            out += base_op_script((x, y))
         elif n == "execute2":
             out += execute2_script()
         elif n in DEEP_GROUPS:
