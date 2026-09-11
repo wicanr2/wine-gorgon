@@ -23,6 +23,63 @@ func RegisterFile(p *Process) {
 		return uint32(fh), nil
 	}
 
+	// OpenFile（KERNEL.#74）：`_lopen` 的大表哥。它會填一份 OFSTRUCT，
+	// 而且 `OF_EXIST` 只問「在不在」不真的開檔。
+	//
+	// PTO2 用它掃光碟機：對每個 DRIVE_REMOTE 的磁碟機開
+	// `<X>:\TEKE2WIN.HLP`，開得起來就當那台是光碟（`RE:cseg11:0x2022`）。
+	h["KERNEL.#74"] = func(p *Process, a Args) (uint32, error) {
+		const (
+			ofExist  = 0x4000
+			ofDelete = 0x0200
+			ofParse  = 0x0100
+		)
+		sel, off := a.Ptr(0)
+		name := p.CString(sel, off)
+		bufSel, bufOff := a.Ptr(4)
+		style := a.Word(8)
+
+		// OFSTRUCT：cBytes、fFixedDisk、nErrCode、reserved[4]、szPathName[128]。
+		writeOF := func(errCode uint16) {
+			if bufSel == 0 {
+				return
+			}
+			_ = p.Mod.Mem.WriteU8(bufSel, bufOff, 136)
+			_ = p.Mod.Mem.WriteU8(bufSel, bufOff+1, 1)
+			_ = p.Mod.Mem.WriteU16(bufSel, bufOff+2, errCode)
+			for i := 0; i < 4; i++ {
+				_ = p.Mod.Mem.WriteU8(bufSel, bufOff+4+uint16(i), 0)
+			}
+			b := []byte(name)
+			if len(b) > 127 {
+				b = b[:127]
+			}
+			for i, c := range b {
+				_ = p.Mod.Mem.WriteU8(bufSel, bufOff+8+uint16(i), c)
+			}
+			_ = p.Mod.Mem.WriteU8(bufSel, bufOff+8+uint16(len(b)), 0)
+		}
+
+		if style&(ofExist|ofParse) != 0 && style&ofDelete == 0 {
+			if p.FS.Exists(name) {
+				writeOF(0)
+				return 1, nil
+			}
+			// 2 是 DOS 的「找不到檔案」。
+			writeOF(2)
+			p.note("OpenFile(%s) 不存在（style=%04X）", name, style)
+			return hfileError, nil
+		}
+		fh, err := p.FS.Open(name, int(style&3))
+		if err != nil {
+			writeOF(2)
+			p.note("OpenFile 失敗：%v（style=%04X）", err, style)
+			return hfileError, nil
+		}
+		writeOF(0)
+		return uint32(fh), nil
+	}
+
 	h["KERNEL.#83"] = func(p *Process, a Args) (uint32, error) { // _lcreat(name, attr)
 		sel, off := a.Ptr(0)
 		fh, err := p.FS.Create(p.CString(sel, off))

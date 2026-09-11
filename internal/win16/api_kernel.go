@@ -236,6 +236,34 @@ func RegisterKernel(p *Process) {
 		})
 		return 0, nil
 	}
+
+	// GetDriveType（KERNEL.#136）：0 是 A、1 是 B、依此類推。
+	//
+	// Win16 的傳回值是 0＝判斷不出來、1＝沒有這台、2＝可移除、3＝固定、
+	// 4＝網路。**CD-ROM 在 Windows 3.1 底下是 4**——MSCDEX 是掛成網路
+	// 重導向的。PTO2 就靠這一點找光碟機（`RE:cseg11:0x2022`：掃 A..Z 找
+	// 型別 4 而且根目錄開得起 `TEKE2WIN.HLP` 的那一台）。
+	h["KERNEL.#136"] = func(p *Process, a Args) (uint32, error) {
+		drive := byte('A' + a.Word(0))
+		if p.FS != nil {
+			if _, ok := p.FS.Mounts[drive]; ok {
+				return driveRemote, nil
+			}
+			if drive == p.FS.Drive {
+				return driveFixed, nil
+			}
+		}
+		return driveNone, nil
+	}
 }
+
+// Win16 的 GetDriveType 傳回值。
+const (
+	driveUnknown   = 0
+	driveNone      = 1
+	driveRemovable = 2
+	driveFixed     = 3
+	driveRemote    = 4
+)
 
 const gmemZeroInit = 0x0040

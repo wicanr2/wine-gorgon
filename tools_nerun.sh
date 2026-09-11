@@ -3,6 +3,7 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 GAME=${PTO2_GAME:-/home/anr2/cht/pto2-remake/private/original/PTO-Paci/PTO2WIN}
+CD=${PTO2_CD_DIR:-/home/anr2/cht/pto2-remake/private/original/PTO-Paci/cd}
 OUT=${OUT:-$ROOT/out}
 mkdir -p "$OUT"
 test -d "$GAME"
@@ -11,7 +12,7 @@ exec docker run --rm --network none \
   --log-opt max-size=10m --log-opt max-file=3 \
   --user "$(id -u):$(id -g)" \
   -v "$ROOT":/src -w /src \
-  -v "$GAME":/game:ro -v "$OUT":/out \
+  -v "$GAME":/game:ro -v "$CD":/cd:ro -v "$OUT":/out \
   -v wine-gorgon-gomod:/gopath/pkg/mod -v wine-gorgon-gocache:/gocache \
   -e GOFLAGS=-mod=mod -e GOPATH=/gopath -e GOCACHE=/gocache -e HOME=/tmp \
   golang:1.26.7-bookworm \

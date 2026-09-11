@@ -24,6 +24,11 @@ type FileSystem struct {
 	Drive     byte   // 這個根目錄掛在哪個磁碟機，預設 'C'
 	Prefix    string // 根目錄對應的 DOS 目錄，例如 `CIV`
 
+	// Mounts 是額外的唯讀磁碟機，鍵是大寫的磁碟機代號。CD-ROM 掛在這裡：
+	// 老遊戲會掃 A..Z 找「是光碟而且根目錄有某個檔」的那一台，沒有第二個
+	// 磁碟機就過不去。這些掛載沒有 Prefix、永遠不可寫。
+	Mounts map[byte]string
+
 	files map[uint16]*openFile
 	next  uint16
 
@@ -55,7 +60,21 @@ func NewFileSystem(root, prefix string) *FileSystem {
 
 // hostPath 把 DOS 路徑換成主機路徑。找不到就回空字串。
 func (fs *FileSystem) hostPath(dos string, forWrite bool) string {
-	rel := strings.TrimPrefix(strings.ToUpper(dos), fmt.Sprintf("%c:", fs.Drive))
+	up := strings.ToUpper(dos)
+	// 先看額外掛載的磁碟機。它們是唯讀的，所以寫入一律回空。
+	if len(up) >= 2 && up[1] == ':' {
+		if root, ok := fs.Mounts[up[0]]; ok && up[0] != fs.Drive {
+			if forWrite {
+				return ""
+			}
+			rel := strings.TrimPrefix(strings.ReplaceAll(up[2:], "\\", "/"), "/")
+			if rel == "" {
+				return ""
+			}
+			return resolveCase(root, rel)
+		}
+	}
+	rel := strings.TrimPrefix(up, fmt.Sprintf("%c:", fs.Drive))
 	rel = strings.ReplaceAll(rel, "\\", "/")
 	rel = strings.TrimPrefix(rel, "/")
 	// 只在「整個路徑元件」相符時才剝掉前綴。用 TrimPrefix 剝裸字串會把

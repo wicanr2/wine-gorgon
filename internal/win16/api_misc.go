@@ -1,5 +1,7 @@
 package win16
 
+import "strings"
+
 // fileDialog 是 GetOpenFileName／GetSaveFileName 的共同實作。
 func (p *Process) fileDialog(a Args) (uint32, error) {
 	if p.FileDialogPath == "" {
@@ -93,7 +95,32 @@ func RegisterMisc(p *Process) {
 			mciNotifySuccessful = 0x0001
 			mciModeStop         = 525
 
-			mcierrInvalidDeviceID = 258
+			// MCI_OPEN 的旗標與欄位
+			mciOpenType = 0x2000
+
+			// MCI_SET_TIME_FORMAT 與格式編號
+			mciSetTimeFormat = 0x0400
+			formatMS         = 0
+			formatMSF        = 2
+			formatFrames     = 3
+			formatTMSF       = 10
+
+			// MCI_STATUS 的旗標與 dwItem
+			mciStatusItem      = 0x0100
+			mciTrack           = 0x0010
+			statusLength       = 1
+			statusPosition     = 2
+			statusNumTracks    = 3
+			statusMode         = 4
+			statusMediaPresent = 5
+			statusReady        = 7
+			statusCDATypeTrack = 0x4001
+			cdaTrackAudio      = 0x4E03
+
+			mcierrInvalidDeviceID   = 258
+			mcierrInvalidDeviceName = 261
+			mcierrUnsupportedFunc   = 268
+			mcierrOutOfRange        = 269
 		)
 		devID := a.Word(0)
 		msg := a.Word(2)
@@ -120,14 +147,38 @@ func RegisterMisc(p *Process) {
 			}
 		}
 
+		get32 := func(d uint16) uint32 {
+			if psel == 0 {
+				return 0
+			}
+			lo, _ := p.Mod.Mem.ReadU16(psel, poff+d)
+			hi, _ := p.Mod.Mem.ReadU16(psel, poff+d+2)
+			return uint32(hi)<<16 | uint32(lo)
+		}
+		dev := p.MCIOpen[devID]
+
 		switch msg {
 		case mciOpen:
+			devType := ""
+			if flags&mciOpenType != 0 && psel != 0 {
+				// MCI_OPEN_PARMS.lpstrDeviceType 在 +8。
+				sel, _ := p.Mod.Mem.ReadU16(psel, poff+10)
+				off, _ := p.Mod.Mem.ReadU16(psel, poff+8)
+				if sel != 0 {
+					devType = strings.ToLower(p.CString(sel, off))
+				}
+			}
+			// 沒有光碟就開不起來。這不是保守，是誠實：遊戲會據此顯示
+			// 「Can't open CD-ROM DEVICE.」，那正是真實機器上的行為。
+			if devType == "cdaudio" && p.Disc == nil {
+				return mcierrInvalidDeviceName, nil
+			}
 			if p.MCIOpen == nil {
-				p.MCIOpen = map[uint16]bool{}
+				p.MCIOpen = map[uint16]*MCIDevice{}
 			}
 			p.MCINextID++
 			id := p.MCINextID
-			p.MCIOpen[id] = true
+			p.MCIOpen[id] = &MCIDevice{Type: devType, TimeFormat: formatMSF}
 			put16(4, id) // MCI_OPEN_PARMS.wDeviceID
 			notify()
 			return 0, nil
@@ -138,22 +189,36 @@ func RegisterMisc(p *Process) {
 			return 0, nil
 
 		case mciPlay, mciSeek, mciStop:
-			if devID != 0 && !p.MCIOpen[devID] {
+			if devID != 0 && dev == nil {
 				return mcierrInvalidDeviceID, nil
 			}
 			// 立刻完成。真的播放要等的是牆鐘時間，而對拍不能等牆鐘。
 			notify()
 			return 0, nil
 
-		case mciStatus:
-			if devID != 0 && !p.MCIOpen[devID] {
+		case mciSet:
+			if devID != 0 && dev == nil {
 				return mcierrInvalidDeviceID, nil
 			}
-			put32(4, mciModeStop) // MCI_STATUS_PARMS.dwReturn
+			if flags&mciSetTimeFormat != 0 && dev != nil {
+				dev.TimeFormat = get32(4) // MCI_SET_PARMS.dwTimeFormat
+			}
 			notify()
 			return 0, nil
 
-		case mciSet, mciInfo:
+		case mciStatus:
+			if devID != 0 && dev == nil {
+				return mcierrInvalidDeviceID, nil
+			}
+			ret, err := p.mciStatus(dev, flags, get32(8), get32(12))
+			if err != 0 {
+				return err, nil
+			}
+			put32(4, ret) // MCI_STATUS_PARMS.dwReturn
+			notify()
+			return 0, nil
+
+		case mciInfo:
 			notify()
 			return 0, nil
 		}
@@ -222,4 +287,90 @@ func RegisterMisc(p *Process) {
 		_ = p.Mod.Mem.WriteU16(maxSel, maxOff, uint16(int16(w.ScrollMax[bar])))
 		return 1, nil
 	}
+}
+
+// mciStatus 回答 MCI_STATUS 的查詢。第二個回傳值不為 0 時是 MCI 錯誤碼。
+//
+// 為什麼要分出來：`cdaudio` 的查詢答案取決於真實 TOC，而 TOC 是外面給的
+// （`Process.Disc`）。把它和「送通知、寫回傳值」的殼分開，測試就能直接
+// 問「第 2 軌多長」，不必鋪一份 MCI_STATUS_PARMS。
+func (p *Process) mciStatus(dev *MCIDevice, flags, item, track uint32) (uint32, uint32) {
+	const (
+		mciStatusItem      = 0x0100
+		mciTrack           = 0x0010
+		statusLength       = 1
+		statusPosition     = 2
+		statusNumTracks    = 3
+		statusMode         = 4
+		statusMediaPresent = 5
+		statusReady        = 7
+		statusCDATypeTrack = 0x4001
+		cdaTrackAudio      = 0x4E03
+		mciModeStop        = 525
+
+		mcierrOutOfRange      = 269
+		mcierrUnsupportedFunc = 268
+	)
+	if flags&mciStatusItem == 0 {
+		return mciModeStop, 0
+	}
+	cd := dev != nil && dev.Type == "cdaudio"
+	if !cd || p.Disc == nil {
+		// 非 cdaudio 的裝置（開場影片走 MCI_OPEN 不帶型別）維持舊行為：
+		// 一律回「已停止」。它們的內容不影響遊戲狀態。
+		switch item {
+		case statusMode:
+			return mciModeStop, 0
+		case statusReady, statusMediaPresent:
+			return 1, 0
+		}
+		return mciModeStop, 0
+	}
+
+	switch item {
+	case statusNumTracks:
+		return uint32(p.Disc.Count()), 0
+	case statusMode:
+		return mciModeStop, 0
+	case statusReady, statusMediaPresent:
+		return 1, 0
+	case statusCDATypeTrack:
+		return cdaTrackAudio, 0
+	case statusLength, statusPosition:
+		frames := 0
+		if flags&mciTrack != 0 {
+			n := int(track)
+			if p.Disc.TrackFrames(n) == 0 && p.Disc.TrackStart(n) == 0 {
+				return 0, mcierrOutOfRange
+			}
+			if item == statusLength {
+				frames = p.Disc.TrackFrames(n)
+			} else {
+				frames = p.Disc.TrackStart(n)
+			}
+		} else if item == statusLength {
+			frames = p.Disc.End
+		}
+		return p.mciTime(dev, frames), 0
+	}
+	return 0, mcierrUnsupportedFunc
+}
+
+// mciTime 把幀數換成裝置目前時間格式下的值。
+func (p *Process) mciTime(dev *MCIDevice, frames int) uint32 {
+	const (
+		formatMS     = 0
+		formatFrames = 3
+		formatTMSF   = 10
+	)
+	switch dev.TimeFormat {
+	case formatFrames:
+		return uint32(frames)
+	case formatMS:
+		return uint32(frames * 1000 / FramesPerSecond)
+	case formatTMSF:
+		// TMSF 的第一個 byte 是音軌；查詢單軌長度時原版填 0。
+		return FramesToMSF(frames) << 8
+	}
+	return FramesToMSF(frames)
 }

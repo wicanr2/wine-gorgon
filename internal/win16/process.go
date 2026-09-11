@@ -43,7 +43,12 @@ type Process struct {
 	// MCINextID 是下一個要發出去的 MCI 裝置代號。0 是「無效裝置」，
 	// 所以從 1 開始。MCIOpen 記哪些代號還開著。
 	MCINextID uint16
-	MCIOpen   map[uint16]bool
+	MCIOpen   map[uint16]*MCIDevice
+
+	// Disc 是光碟的目錄（TOC）。有值時 MCI 的 `cdaudio` 回報真實音軌
+	// 數與長度；沒有時 `cdaudio` 一律開不起來——**回一個看起來合理的
+	// 假 TOC 是不行的**，老遊戲會拿音軌長度當光碟指紋。
+	Disc *Disc
 
 	// WinGBits 記每塊 WinG DIB 的 bits 落在哪個 selector。
 	// 遊戲直接寫那塊記憶體畫畫面，Surface 與它共用同一份 bytes——
@@ -234,6 +239,18 @@ func (a Args) Long(off int) uint32 {
 func (a Args) Ptr(off int) (sel, o uint16) {
 	v := a.Long(off)
 	return uint16(v >> 16), uint16(v)
+}
+
+// MCIDevice 是一個開著的 MCI 裝置。
+//
+// 要記型別與時間格式，是因為查詢的答案取決於它們：`cdaudio` 的
+// `MCI_STATUS_LENGTH` 在 MSF 格式下回的是打包的分秒幀，在 frames
+// 格式下回的是幀數，兩者差了 75 倍。
+type MCIDevice struct {
+	// Type 是 MCI_OPEN 給的裝置型別字串，小寫（例 "cdaudio"）。
+	Type string
+	// TimeFormat 是 MCI_SET_TIME_FORMAT 設的格式，預設 MSF。
+	TimeFormat uint32
 }
 
 // Call 是一次 API 呼叫的紀錄。

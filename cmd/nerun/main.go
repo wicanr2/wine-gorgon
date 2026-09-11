@@ -35,19 +35,22 @@ func main() {
 	around := flag.String("around", "", "印出第一次呼叫這支 API 前後的紀錄（例：GDI.BITBLT）")
 	clockUS := flag.Uint("clock-us", 10, "StepClock 每條指令算幾微秒；調小可以讓「繪製本身花掉的虛擬時間」變小")
 	watch := flag.String("watch", "", "執行到這些 CS:IP 就印一行，格式 sel:off[=名字]，逗號分隔（例 002F:5F8F=quit1）")
+	cd := flag.String("cd", "", "原版 CD 的 .cue；MCI 的 cdaudio 會照它回報音軌數與長度")
+	cdRoot := flag.String("cd-root", "", "光碟資料軌的目錄，唯讀掛成 -cd-drive 指定的磁碟機")
+	cdDrive := flag.String("cd-drive", "D", "光碟掛在哪個磁碟機")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "用法：nerun [選項] <NE 檔>")
 		os.Exit(2)
 	}
 
-	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *wingShot, *script, *around, *screen, *openPath, *watch, *collapse, uint32(*clockUS)); err != nil {
+	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *wingShot, *script, *around, *screen, *openPath, *watch, *cd, *cdRoot, *cdDrive, *collapse, uint32(*clockUS)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wingShot, script, around, screen, openPath, watch string, collapse bool, clockUS uint32) error {
+func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wingShot, script, around, screen, openPath, watch, cd, cdRoot, cdDrive string, collapse bool, clockUS uint32) error {
 	img, err := ne.Open(path)
 	if err != nil {
 		return err
@@ -81,6 +84,26 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wi
 		p.FS.Root = data
 	}
 	p.FS.WriteRoot = write
+	if cd != "" {
+		disc, err := win16.LoadCue(cd)
+		if err != nil {
+			return err
+		}
+		p.Disc = disc
+		fmt.Printf("光碟 %d 條音軌，共 %d 幀（%d:%02d）\n", disc.Count(), disc.End,
+			disc.End/win16.FramesPerSecond/60, disc.End/win16.FramesPerSecond%60)
+	}
+	if cdRoot != "" {
+		if cdDrive == "" {
+			return fmt.Errorf("-cd-root 要配 -cd-drive")
+		}
+		letter := strings.ToUpper(cdDrive)[0]
+		if p.FS.Mounts == nil {
+			p.FS.Mounts = map[byte]string{}
+		}
+		p.FS.Mounts[letter] = cdRoot
+		fmt.Printf("光碟資料軌掛在 %c:（%s）\n", letter, cdRoot)
+	}
 	defer p.FS.CloseAll()
 	if n, err := p.LoadInstalledFonts(); err == nil && n > 0 {
 		fmt.Printf("載入字型 %d 個字面（%v）\n", n, p.FontFiles)
