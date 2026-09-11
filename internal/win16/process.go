@@ -303,7 +303,7 @@ func NewProcess(mod *Module) (*Process, error) { return NewProcessSized(mod, 640
 // 那一份 oracle 當時的解析度（civ1 的參考幀是 Windows 3.1 800×600）。
 func NewProcessSized(mod *Module, screenW, screenH int) (*Process, error) {
 	p := &Process{Mod: mod, Handlers: map[string]Handler{}, RawHandlers: map[string]RawHandler{}, TraceLimit: 100000}
-	c := cpu.New(mod.Mem)
+	c := cpu.New(NewCPUBus(mod.Mem))
 	p.CPU = c
 
 	seg, off, err := mod.Image.Entry()

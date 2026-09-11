@@ -16,11 +16,17 @@ package cpu
 import "fmt"
 
 // Bus 是 CPU 看得到的記憶體。抽成介面是為了讓指令測試不必先鋪一個 NE。
+//
+// **位移是 32 位元的。** 386 的段界可以超過 64 KiB，而那不是理論上的
+// 可能性：PTO2 的 1bpp→8bpp 展開迴圈用 `67` 前綴拿 EDI 直接走完整張
+// 640×416 的 WinG DIB（`RE:cseg11:0x54d4`），EDI 會走到 0x101B1。
+// 把位移釘成 16 位元，那條迴圈會在第 65,536 個像素安靜地走錯。
+// 界限由 Bus 自己判——它才知道每個 selector 後面那塊有多大。
 type Bus interface {
-	ReadU8(sel, off uint16) (uint8, error)
-	ReadU16(sel, off uint16) (uint16, error)
-	WriteU8(sel, off uint16, v uint8) error
-	WriteU16(sel, off uint16, v uint16) error
+	ReadU8(sel uint16, off uint32) (uint8, error)
+	ReadU16(sel uint16, off uint32) (uint16, error)
+	WriteU8(sel uint16, off uint32, v uint8) error
+	WriteU16(sel uint16, off uint32, v uint16) error
 }
 
 // SelectorInfo 是 Bus 可以額外提供的 selector 資訊。
@@ -217,7 +223,7 @@ func (c *CPU) wrap(ip uint16, err error, format string, a ...any) error {
 
 // --- 匯流排：32 位元讀寫拆成兩次 16 位元，越界照樣是錯誤 ---
 
-func (c *CPU) busRead(sel, off uint16, sz Size) (uint32, error) {
+func (c *CPU) busRead(sel uint16, off uint32, sz Size) (uint32, error) {
 	switch sz {
 	case S8:
 		v, err := c.Bus.ReadU8(sel, off)
@@ -235,7 +241,7 @@ func (c *CPU) busRead(sel, off uint16, sz Size) (uint32, error) {
 	}
 }
 
-func (c *CPU) busWrite(sel, off uint16, sz Size, v uint32) error {
+func (c *CPU) busWrite(sel uint16, off uint32, sz Size, v uint32) error {
 	switch sz {
 	case S8:
 		return c.Bus.WriteU8(sel, off, uint8(v))
@@ -252,7 +258,7 @@ func (c *CPU) busWrite(sel, off uint16, sz Size, v uint32) error {
 // --- 取指 ---
 
 func (c *CPU) fetch8() (uint8, error) {
-	v, err := c.Bus.ReadU8(c.Seg[CS], c.IP)
+	v, err := c.Bus.ReadU8(c.Seg[CS], uint32(c.IP))
 	if err != nil {
 		return 0, err
 	}
@@ -261,7 +267,7 @@ func (c *CPU) fetch8() (uint8, error) {
 }
 
 func (c *CPU) fetch16() (uint16, error) {
-	v, err := c.Bus.ReadU16(c.Seg[CS], c.IP)
+	v, err := c.Bus.ReadU16(c.Seg[CS], uint32(c.IP))
 	if err != nil {
 		return 0, err
 	}
@@ -300,14 +306,14 @@ func (c *CPU) fetchImm(sz Size) (uint32, error) {
 func (c *CPU) pushSize(v uint32, sz Size) error {
 	if sz == S32 {
 		c.SetR16(SP, c.R16(SP)-4)
-		return c.busWrite(c.Seg[SS], c.R16(SP), S32, v)
+		return c.busWrite(c.Seg[SS], uint32(c.R16(SP)), S32, v)
 	}
 	c.SetR16(SP, c.R16(SP)-2)
-	return c.Bus.WriteU16(c.Seg[SS], c.R16(SP), uint16(v))
+	return c.Bus.WriteU16(c.Seg[SS], uint32(c.R16(SP)), uint16(v))
 }
 
 func (c *CPU) popSize(sz Size) (uint32, error) {
-	v, err := c.busRead(c.Seg[SS], c.R16(SP), sz)
+	v, err := c.busRead(c.Seg[SS], uint32(c.R16(SP)), sz)
 	if err != nil {
 		return 0, err
 	}

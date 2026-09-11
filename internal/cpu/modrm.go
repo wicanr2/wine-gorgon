@@ -7,7 +7,7 @@ type operand struct {
 	isReg bool
 	reg   int
 	sel   uint16
-	off   uint16
+	off   uint32
 }
 
 // modrm 是解完的 ModRM 位元組。
@@ -63,7 +63,7 @@ func (c *CPU) decodeModRM() (modrm, error) {
 			if err != nil {
 				return modrm{}, err
 			}
-			m.rm = operand{sel: c.dataSeg(DS), off: d}
+			m.rm = operand{sel: c.dataSeg(DS), off: uint32(d)}
 			return m, nil
 		}
 		base = c.R16(BP)
@@ -86,7 +86,7 @@ func (c *CPU) decodeModRM() (modrm, error) {
 		}
 		base += d
 	}
-	m.rm = operand{sel: c.dataSeg(defSeg), off: base}
+	m.rm = operand{sel: c.dataSeg(defSeg), off: uint32(base)}
 	return m, nil
 }
 
@@ -177,9 +177,9 @@ func (c *CPU) decodeModRM32(m modrm, rm int) (modrm, error) {
 		}
 		base += d
 	}
-	if base > 0xFFFF {
-		return modrm{}, c.errf(c.IP, "32 位元定址算出 %08X，超出 16 位元段界", base)
-	}
-	m.rm = operand{sel: c.dataSeg(defSeg), off: uint16(base)}
+	// **不在這裡夾成 16 位元。** 386 的段界可以超過 64 KiB，界限由 Bus 判
+	// ——它才知道這個 selector 後面那塊有多大。夾在這裡的話，超界的位址
+	// 會安靜地繞回段頭，寫壞的是別人的資料。
+	m.rm = operand{sel: c.dataSeg(defSeg), off: base}
 	return m, nil
 }

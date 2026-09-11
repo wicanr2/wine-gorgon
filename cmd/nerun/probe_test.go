@@ -14,7 +14,7 @@ func probeProcess(code []byte) *win16.Process {
 	m := win16.NewMemory()
 	m.Put(15, "合成程式", code)
 	m.Put(23, "合成資料", make([]byte, 8))
-	c := cpu.New(m)
+	c := cpu.New(win16.NewCPUBus(m))
 	c.Seg[cpu.CS] = 15
 	return &win16.Process{CPU: c, Mod: &win16.Module{Mem: m}}
 }

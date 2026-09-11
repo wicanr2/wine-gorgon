@@ -90,15 +90,14 @@ func RegisterWinG(p *Process) {
 			p.note("WinGCreateBitmap(%dx%d) 配不到記憶體", w, hgt)
 			return 0, nil
 		}
-		// AllocHuge 把一個完整 backing 切成 64 KiB 一段分給連號 selector，
-		// 回傳的 Block 只持有第一段。那些段共用同一個 backing 而且 cap 足夠，
-		// 所以再切一次就拿得回完整範圍——Surface 要看到整塊，不是只有前 64 KiB。
+		// AllocHuge 的每一格段界都延伸到整塊的結尾，所以第一格看到的就是
+		// 整張圖——Surface 直接用它，和遊戲寫的是同一份 bytes。
 		need := stride * hgt
 		bits := b.Data
-		if cap(bits) >= need {
-			bits = bits[:need]
+		if len(bits) < need {
+			p.note("WinGCreateBitmap：只配到 %d bytes，需要 %d", len(bits), need)
 		} else {
-			p.note("WinGCreateBitmap：backing 只有 %d bytes，需要 %d", cap(bits), need)
+			bits = bits[:need]
 		}
 		surf := &Surface{W: w, H: hgt, Stride: stride, Bits: bits}
 		if p.WinGBits == nil {

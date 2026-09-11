@@ -150,14 +150,19 @@ func (m *Memory) AllocHuge(name string, size int) *Block {
 	const chunk = 0x10000
 	n := (size + chunk - 1) / chunk
 
+	// **每一格的段界都延伸到整塊的結尾**，不是各自 64 KiB。
+	//
+	// 這不是放寬檢查，是 Win16 huge 配置的形狀：連號 selector 的基底
+	// 每格差 64 KiB，但界限是「從我這裡到整塊的尾巴」。PTO2 的矩形搬移
+	// 迴圈（`RE:cseg11:0x512d`）直接證明了這一點——它只在 EDI 變成負數時
+	// 修正 selector（`es -= 8; edi += 0x10000`），**往前跨過 64 KiB 邊界時
+	// 完全不修**。一列 640 個 byte 必然會有某幾列跨過邊界；界限若只有
+	// 64 KiB，那幾列在真機上就會當掉。
 	var first *Block
 	var prev *Block
 	for i := 0; i < n; i++ {
 		lo := i * chunk
-		hi := lo + chunk
-		if hi > size {
-			hi = size
-		}
+		hi := size
 		sel, ok := m.nextSel()
 		if !ok {
 			return nil

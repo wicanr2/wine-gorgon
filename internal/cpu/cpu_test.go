@@ -25,31 +25,42 @@ func newBus() *flatBus {
 	return b
 }
 
-var errNoSeg = errors.New("沒有這個 selector")
+var (
+	errNoSeg      = errors.New("沒有這個 selector")
+	errOutOfRange = errors.New("超出段界")
+)
 
-func (b *flatBus) at(sel uint16) ([]byte, error) {
+// 測試用的段都是 64 KiB，所以超界的位移在這裡就是錯誤——真的 Bus
+// （win16.CPUBus）會照 Block 的長度判，那才是段界的真相。
+func (b *flatBus) at(sel uint16, off uint32, n uint32) ([]byte, error) {
 	m, ok := b.seg[sel]
 	if !ok {
 		return nil, errNoSeg
 	}
+	if off+n > uint32(len(m)) {
+		return nil, errOutOfRange
+	}
 	return m, nil
 }
 
-func (b *flatBus) ReadU8(sel, off uint16) (uint8, error) {
-	m, err := b.at(sel)
-	return orZero(m, off), err
-}
-
-func (b *flatBus) ReadU16(sel, off uint16) (uint16, error) {
-	m, err := b.at(sel)
+func (b *flatBus) ReadU8(sel uint16, off uint32) (uint8, error) {
+	m, err := b.at(sel, off, 1)
 	if err != nil {
 		return 0, err
 	}
-	return uint16(m[off]) | uint16(m[uint16(off+1)])<<8, nil
+	return m[off], nil
 }
 
-func (b *flatBus) WriteU8(sel, off uint16, v uint8) error {
-	m, err := b.at(sel)
+func (b *flatBus) ReadU16(sel uint16, off uint32) (uint16, error) {
+	m, err := b.at(sel, off, 2)
+	if err != nil {
+		return 0, err
+	}
+	return uint16(m[off]) | uint16(m[off+1])<<8, nil
+}
+
+func (b *flatBus) WriteU8(sel uint16, off uint32, v uint8) error {
+	m, err := b.at(sel, off, 1)
 	if err != nil {
 		return err
 	}
@@ -57,21 +68,14 @@ func (b *flatBus) WriteU8(sel, off uint16, v uint8) error {
 	return nil
 }
 
-func (b *flatBus) WriteU16(sel, off uint16, v uint16) error {
-	m, err := b.at(sel)
+func (b *flatBus) WriteU16(sel uint16, off uint32, v uint16) error {
+	m, err := b.at(sel, off, 2)
 	if err != nil {
 		return err
 	}
 	m[off] = uint8(v)
-	m[uint16(off+1)] = uint8(v >> 8)
+	m[off+1] = uint8(v >> 8)
 	return nil
-}
-
-func orZero(m []byte, off uint16) uint8 {
-	if m == nil {
-		return 0
-	}
-	return m[off]
 }
 
 // run 把 code 放在 tCS:0000 跑 steps 條指令。

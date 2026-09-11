@@ -510,7 +510,7 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		if err != nil {
 			return c.wrap(ip, err, "位移")
 		}
-		o := operand{sel: c.dataSeg(DS), off: d}
+		o := operand{sel: c.dataSeg(DS), off: uint32(d)}
 		if op < 0xA2 {
 			v, err := c.readOp(o, sz)
 			if err != nil {
@@ -619,7 +619,7 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		frame := c.R16(SP)
 		for i := uint8(1); i < lvl; i++ {
 			c.SetR16(BP, c.R16(BP)-2)
-			v, err := c.Bus.ReadU16(c.Seg[SS], c.R16(BP))
+			v, err := c.Bus.ReadU16(c.Seg[SS], uint32(c.R16(BP)))
 			if err != nil {
 				return c.wrap(ip, err, "enter 巢狀")
 			}
@@ -671,7 +671,7 @@ func (c *CPU) exec(op uint8, ip uint16) error {
 		}
 		return c.errf(ip, "未實作的軟體中斷 INT %02Xh（AX=%04X）", n, c.R16(AX))
 	case 0xD7: // XLAT
-		v, err := c.Bus.ReadU8(c.dataSeg(DS), c.R16(BX)+uint16(c.Reg8(0)))
+		v, err := c.Bus.ReadU8(c.dataSeg(DS), uint32(c.R16(BX)+uint16(c.Reg8(0))))
 		if err != nil {
 			return c.wrap(ip, err, "xlat")
 		}
