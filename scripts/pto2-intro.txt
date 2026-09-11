@@ -1,0 +1,11 @@
+# PTO2：從開場影片走到主選單。
+#
+# 開場影片是**循環播放的**（`RE:cseg11:0x209a`：播完等一下再播，
+# 直到有輸入）。DOS 版也一樣——使用者的實測是「按 esc 才進得了選單，
+# 不然就會一直播片頭」。所以這裡要真的送一次點擊，不是等它自己結束。
+run 3000000
+click 320,240
+run 3000000
+shot intro-after-click.png
+run 3000000
+shot intro-after-click2.png
