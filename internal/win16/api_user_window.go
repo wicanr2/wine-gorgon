@@ -231,8 +231,37 @@ func RegisterUserWindow(p *Process) {
 			return 0, nil
 		}
 		p.writeMsg(msgSel, msgOff, m)
+		if err := p.callGetMessageHook(msgSel, msgOff, a.Word(10)&1); err != nil {
+			return 0, err
+		}
 		return 1, nil
 	}
+
+	// SetWindowsHookEx(idHook, lpfn, hInstance, hTask)
+	//
+	// 回傳的是 HHOOK（DX:AX，高位是 0）。只有 WH_GETMESSAGE 會真的被派送；
+	// 其他型別登記得起來但不會被呼叫，所以登記時說一聲——安靜地不呼叫
+	// 會讓遊戲看起來只是「沒反應」，查起來完全沒有線索。
+	h["USER.#291"] = func(p *Process, a Args) (uint32, error) {
+		id := int(int16(a.Word(0)))
+		off, sel := a.Word(2), a.Word(4)
+		handle := p.SetHook(id, sel, off, a.Word(8))
+		if id != WHGetMessage {
+			p.note("SetWindowsHookEx：型別 %d 登記了但不會被派送（%04X:%04X）", id, sel, off)
+		}
+		return uint32(handle), nil
+	}
+
+	h["USER.#292"] = func(p *Process, a Args) (uint32, error) { // UnhookWindowsHookEx
+		if p.RemoveHook(a.Word(0)) {
+			return 1, nil
+		}
+		return 0, nil
+	}
+
+	// CallNextHookEx：我們一次只派送一層，所以「下一個」永遠沒有。
+	// 回 0 是「沒人處理」，呼叫端會照預設流程走。
+	h["USER.#293"] = func(p *Process, _ Args) (uint32, error) { return 0, nil }
 
 	// IsDialogMessage(HWND hDlg, MSG far*)
 	//
@@ -433,6 +462,55 @@ func RegisterUserWindow(p *Process) {
 		_ = p.Mod.Mem.WriteU16(sel, off, uint16(int16(x)-int16(w.ClientX)))
 		_ = p.Mod.Mem.WriteU16(sel, off+2, uint16(int16(y)-int16(w.ClientY)))
 		return 1, nil
+	}
+
+	h["USER.#28"] = func(p *Process, a Args) (uint32, error) { // ClientToScreen
+		w, ok := p.Window(a.Word(0))
+		if !ok {
+			return 0, nil
+		}
+		sel, off := a.Ptr(2)
+		x, _ := p.Mod.Mem.ReadU16(sel, off)
+		y, _ := p.Mod.Mem.ReadU16(sel, off+2)
+		_ = p.Mod.Mem.WriteU16(sel, off, uint16(int16(x)+int16(w.ClientX)))
+		_ = p.Mod.Mem.WriteU16(sel, off+2, uint16(int16(y)+int16(w.ClientY)))
+		return 1, nil
+	}
+
+	// SetWindowPos(hwnd, hwndInsertAfter, x, y, cx, cy, flags)
+	//
+	// Z 次序在這裡沒有意義（只有一個頂層視窗在畫），所以只做位置與大小，
+	// 並照旗標決定要不要動。SWP_NOMOVE=2、SWP_NOSIZE=1。
+	h["USER.#232"] = func(p *Process, a Args) (uint32, error) {
+		const (
+			swpNoSize = 0x0001
+			swpNoMove = 0x0002
+		)
+		w, ok := p.Window(a.Word(0))
+		if !ok {
+			return 0, nil
+		}
+		flags := a.Word(12)
+		if flags&swpNoMove == 0 {
+			w.X, w.Y = int(int16(a.Word(4))), int(int16(a.Word(6)))
+		}
+		if flags&swpNoSize == 0 {
+			w.W, w.H = int(int16(a.Word(8))), int(int16(a.Word(10)))
+		}
+		p.layout(w)
+		if err := p.sendMoveSize(w); err != nil {
+			return 0, err
+		}
+		p.Invalidate(w, nil, true)
+		return 1, nil
+	}
+
+	// GetWindowTask：只有一個行程，所以每個視窗都屬於同一個 task。
+	h["USER.#224"] = func(p *Process, a Args) (uint32, error) {
+		if _, ok := p.Window(a.Word(0)); !ok {
+			return 0, nil
+		}
+		return uint32(p.TaskHandle()), nil
 	}
 
 	h["USER.#56"] = func(p *Process, a Args) (uint32, error) { // MoveWindow

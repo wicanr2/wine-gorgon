@@ -45,6 +45,13 @@ type Process struct {
 	MCINextID uint16
 	MCIOpen   map[uint16]*MCIDevice
 
+	// DGroup 是自動資料段（DGROUP）的 selector，也就是 Win16 的 hInstance。
+	DGroup uint16
+
+	// Hooks 是 SetWindowsHookEx 裝上去的掛鉤，順序即安裝順序。
+	Hooks    []*Hook
+	hookNext uint16
+
 	// Disc 是光碟的目錄（TOC）。有值時 MCI 的 `cdaudio` 回報真實音軌
 	// 數與長度；沒有時 `cdaudio` 一律開不起來——**回一個看起來合理的
 	// 假 TOC 是不行的**，老遊戲會拿音軌長度當光碟指紋。
@@ -241,6 +248,12 @@ func (a Args) Ptr(off int) (sel, o uint16) {
 	return uint16(v >> 16), uint16(v)
 }
 
+// TaskHandle 是這個行程的 task 代號。
+//
+// wine-gorgon 只跑一個 task，所以它是個常數；用 DGROUP 的 selector
+// 是因為 Win16 的 hInstance 就是它，兩者混用時不會撞到別的東西。
+func (p *Process) TaskHandle() uint16 { return p.DGroup }
+
 // MCIDevice 是一個開著的 MCI 裝置。
 //
 // 要記型別與時間格式，是因為查詢的答案取決於它們：`cdaudio` 的
@@ -305,6 +318,7 @@ func NewProcessSized(mod *Module, screenW, screenH int) (*Process, error) {
 	}
 	c.Seg[cpu.DS] = dsSel
 	c.Seg[cpu.ES] = dsSel
+	p.DGroup = dsSel
 
 	ssSeg := int(mod.Image.SSSP >> 16)
 	sp := uint16(mod.Image.SSSP)
