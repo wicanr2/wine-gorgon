@@ -40,6 +40,11 @@ type Process struct {
 	// TraceLimit 是 Trace 的上限，避免長跑把記憶體吃光；0 表示不限。
 	TraceLimit int
 
+	// MCINextID 是下一個要發出去的 MCI 裝置代號。0 是「無效裝置」，
+	// 所以從 1 開始。MCIOpen 記哪些代號還開著。
+	MCINextID uint16
+	MCIOpen   map[uint16]bool
+
 	// WinGBits 記每塊 WinG DIB 的 bits 落在哪個 selector。
 	// 遊戲直接寫那塊記憶體畫畫面，Surface 與它共用同一份 bytes——
 	// 對拍時讀 Surface 就是讀原版當下的畫面。

@@ -66,21 +66,100 @@ func RegisterMisc(p *Process) {
 
 	// mciSendCommand(UINT devID, UINT msg, DWORD flags, DWORD param)
 	//
-	// **回 0 是「成功」**，不是「沒做」。原本一律回 0 等於告訴遊戲
-	// 「裝置開起來了」，它接著就等播放完成的通知——而我們不送通知，
-	// 所以它一直等。PTO2 因此卡在開場，DIB 停在全黑。
+	// 回 0 是「成功」，非 0 是 MCI 錯誤碼。這裡有三條路可走，前兩條都錯：
 	//
-	// 這裡改回 MCIERR_INVALID_DEVICE_NAME，讓遊戲走「這台機器沒有 CD／
-	// 影片裝置」那條路。那是原版就有的路徑（玩家不一定放著 CD），
-	// 不是我們捏造的行為。
+	//   一律回 0     等於說「裝置開起來了」，遊戲接著等播放完成的通知，
+	//                而我們不送 → 卡在開場。
+	//   一律回錯誤   遊戲走「這台機器沒有 CD／影片」的路徑 → 播完開場就結束，
+	//                因為 PTO2 是 CD 遊戲。
+	//   有狀態       OPEN 發代號、PLAY 立刻完成並送 MM_MCINOTIFY、
+	//                STATUS 回報已停止。這一條才讓遊戲往下走。
 	//
-	// 之後真的要對拍開場動畫時，這裡要改成有狀態的實作：MCI_OPEN 發一個
-	// 裝置代號、MCI_PLAY 帶 MCI_NOTIFY 時排一則 MM_MCINOTIFY 給視窗、
-	// MCI_STATUS 回報位置與長度。在那之前不要假裝裝置存在。
+	// 「立刻完成」是刻意的：對拍要的是決定性，不是真的播放。影片與 CD 音軌
+	// 的內容不影響遊戲狀態，只影響經過的時間——而時間在這裡是可控的。
 	h["MMSYSTEM.#701"] = func(p *Process, a Args) (uint32, error) {
-		const mcierrInvalidDeviceName = 261
-		p.note("mciSendCommand(%04X) 回 MCIERR_INVALID_DEVICE_NAME（沒有 MCI 裝置）", a.Word(2))
-		return mcierrInvalidDeviceName, nil
+		const (
+			mciOpen   = 0x0803
+			mciClose  = 0x0804
+			mciPlay   = 0x0806
+			mciSeek   = 0x0807
+			mciStop   = 0x0808
+			mciInfo   = 0x080A
+			mciSet    = 0x080D
+			mciStatus = 0x0814
+
+			mciNotify           = 0x0001
+			mmMCINotify         = 0x03B9
+			mciNotifySuccessful = 0x0001
+			mciModeStop         = 525
+
+			mcierrInvalidDeviceID = 258
+		)
+		devID := a.Word(0)
+		msg := a.Word(2)
+		flags := a.Long(4)
+		psel, poff := a.Ptr(8)
+
+		put16 := func(d, v uint16) {
+			if psel != 0 {
+				_ = p.Mod.Mem.WriteU16(psel, poff+d, v)
+			}
+		}
+		put32 := func(d uint16, v uint32) { put16(d, uint16(v)); put16(d+2, uint16(v>>16)) }
+		// dwCallback 在每種 MCI_*_PARMS 的第一個欄位，低 16 位是視窗。
+		callbackHwnd := func() uint16 {
+			if psel == 0 {
+				return 0
+			}
+			v, _ := p.Mod.Mem.ReadU16(psel, poff)
+			return v
+		}
+		notify := func() {
+			if flags&mciNotify != 0 {
+				p.PostMessage(callbackHwnd(), mmMCINotify, mciNotifySuccessful, uint32(devID))
+			}
+		}
+
+		switch msg {
+		case mciOpen:
+			if p.MCIOpen == nil {
+				p.MCIOpen = map[uint16]bool{}
+			}
+			p.MCINextID++
+			id := p.MCINextID
+			p.MCIOpen[id] = true
+			put16(4, id) // MCI_OPEN_PARMS.wDeviceID
+			notify()
+			return 0, nil
+
+		case mciClose:
+			delete(p.MCIOpen, devID)
+			notify()
+			return 0, nil
+
+		case mciPlay, mciSeek, mciStop:
+			if devID != 0 && !p.MCIOpen[devID] {
+				return mcierrInvalidDeviceID, nil
+			}
+			// 立刻完成。真的播放要等的是牆鐘時間，而對拍不能等牆鐘。
+			notify()
+			return 0, nil
+
+		case mciStatus:
+			if devID != 0 && !p.MCIOpen[devID] {
+				return mcierrInvalidDeviceID, nil
+			}
+			put32(4, mciModeStop) // MCI_STATUS_PARMS.dwReturn
+			notify()
+			return 0, nil
+
+		case mciSet, mciInfo:
+			notify()
+			return 0, nil
+		}
+		p.note("mciSendCommand：沒處理的命令 %04X（回成功）", msg)
+		notify()
+		return 0, nil
 	}
 
 	// GetOpenFileName／GetSaveFileName(OPENFILENAME far*)
