@@ -1,3 +1,4 @@
 workplace/
 *.EXE
 *.exe
+out/

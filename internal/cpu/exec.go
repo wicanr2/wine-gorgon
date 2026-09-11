@@ -59,6 +59,11 @@ func (c *CPU) Run(maxSteps uint64) error {
 		if c.Halt {
 			return nil
 		}
+		if c.Watch != nil && c.OnWatch != nil {
+			if label, ok := c.Watch[uint32(c.Seg[CS])<<16|uint32(c.IP)]; ok {
+				c.OnWatch(c, label)
+			}
+		}
 		if err := c.Step(); err != nil {
 			return err
 		}

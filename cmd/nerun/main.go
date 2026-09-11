@@ -34,19 +34,20 @@ func main() {
 	script := flag.String("script", "", "腳本檔：run／click／key／shot（見 cmd/nerun/script.go）")
 	around := flag.String("around", "", "印出第一次呼叫這支 API 前後的紀錄（例：GDI.BITBLT）")
 	clockUS := flag.Uint("clock-us", 10, "StepClock 每條指令算幾微秒；調小可以讓「繪製本身花掉的虛擬時間」變小")
+	watch := flag.String("watch", "", "執行到這些 CS:IP 就印一行，格式 sel:off[=名字]，逗號分隔（例 002F:5F8F=quit1）")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "用法：nerun [選項] <NE 檔>")
 		os.Exit(2)
 	}
 
-	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *wingShot, *script, *around, *screen, *openPath, *collapse, uint32(*clockUS)); err != nil {
+	if err := run(flag.Arg(0), *steps, *trace, *stub, *data, *write, *shot, *wingShot, *script, *around, *screen, *openPath, *watch, *collapse, uint32(*clockUS)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wingShot, script, around, screen, openPath string, collapse bool, clockUS uint32) error {
+func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wingShot, script, around, screen, openPath, watch string, collapse bool, clockUS uint32) error {
 	img, err := ne.Open(path)
 	if err != nil {
 		return err
@@ -105,6 +106,9 @@ func run(path string, steps uint64, traceN int, stub bool, data, write, shot, wi
 	}
 
 	c := p.CPU
+	if err := setupWatch(c, watch); err != nil {
+		return err
+	}
 	fmt.Printf("進入點 %04X:%04X，DS=%04X SS:SP=%04X:%04X\n",
 		c.Seg[cpu.CS], c.IP, c.Seg[cpu.DS], c.Seg[cpu.SS], c.R16(cpu.SP))
 

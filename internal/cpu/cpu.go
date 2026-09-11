@@ -102,6 +102,14 @@ type CPU struct {
 	Steps uint64
 	Halt  bool
 
+	// Watch 是「執行到這個 CS:IP 就叫我一聲」，鍵是 selector<<16|offset。
+	// 用途是回答「哪一條路徑走到這裡」——API trace 只看得到跨模組呼叫，
+	// 模組內部的分支要靠這個。nil 時完全不花成本。
+	Watch map[uint32]string
+
+	// OnWatch 在命中 Watch 的位址時被呼叫，label 是 Watch 裡登記的名字。
+	OnWatch func(c *CPU, label string)
+
 	// 一條指令的解碼狀態
 	segOverride int // -1 表示沒有
 	repPrefix   uint8
