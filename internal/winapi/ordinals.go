@@ -193,7 +193,8 @@ var Table = map[string]Func{
 	// 以下是 PTO2（TEKE2WIN.EXE）需要而 CIV.EXE 沒用到的。名稱與 ArgBytes
 	// 取自 Wine 9.0 的 Win16 spec 檔，那是與本表完全獨立的第二來源：
 	// 拿它重算既有 153 支，名稱與 ArgBytes 零不符，所以推導方式可信。
-	// KERNEL.#178（__WINFLAGS）是 equate 不是函式，值待實際執行撞到再定。
+	// KERNEL.#178（__WINFLAGS）是 equate 不是函式；Wine 9.0 的
+	// krnl386.exe16.spec 明定值為 0x0413，歸 ValueImports。
 	// --- KERNEL：PTO2 於 2026-09-11 補（7 支）---
 	"KERNEL.#1":   {"KERNEL", 1, "FATALEXIT", 0},
 	"KERNEL.#3":   {"KERNEL", 3, "GETVERSION", 0},
@@ -254,6 +255,7 @@ func Describe(key string) string {
 // 值取自 286 保護模式的 selector 配置：selector 每 8 遞增一格，
 // 所以 `__AHINCR` ＝ 8、`__AHSHIFT` ＝ 3。CIV.EXE 只用到後者（151 筆重定位）。
 var ValueImports = map[string]uint16{
-	"KERNEL.#113": 3, // __AHSHIFT
-	"KERNEL.#114": 8, // __AHINCR
+	"KERNEL.#113": 3,      // __AHSHIFT
+	"KERNEL.#114": 8,      // __AHINCR
+	"KERNEL.#178": 0x0413, // __WINFLAGS（Wine 9.0 krnl386.exe16.spec）
 }

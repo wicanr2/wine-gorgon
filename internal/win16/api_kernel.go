@@ -16,6 +16,15 @@ import (
 func RegisterKernel(p *Process) {
 	h := p.Handlers
 
+	// FatalExit（KERNEL.#1）在 Wine 9.0 的 Win16 spec 仍是 stub，沒有可用的
+	// pascal 參數形狀。保留目前 AX 的低位元組作診斷離開碼；真正撞到 caller
+	// 時再依該 callsite 訂正，不能在這裡猜一個 stack 參數。
+	h["KERNEL.#1"] = func(p *Process, _ Args) (uint32, error) {
+		code := uint8(p.CPU.R16(cpu.AX))
+		p.CPU.Halt = true
+		return 0, &ExitError{Code: code}
+	}
+
 	// InitTask：Windows 啟動碼的第一件事，回傳值全部在暫存器裡。
 	//   AX = 1 成功
 	//   CX = 堆疊下限（bytes）
@@ -35,6 +44,20 @@ func RegisterKernel(p *Process) {
 	}
 
 	h["KERNEL.#30"] = func(p *Process, _ Args) (uint32, error) { return 0, nil } // WaitEvent
+
+	// DOS3Call（KERNEL.#102）是 register 入口：以目前暫存器執行 INT 21h。
+	// wine-gorgon 的 handler 派送仍負責 far return；把 INT 21h 改過的 DX:AX
+	// 原樣回傳，避免一般 handler 的回傳寫回覆蓋 DOS 結果。
+	h["KERNEL.#102"] = func(p *Process, _ Args) (uint32, error) {
+		handled, err := p.onInt(p.CPU, 0x21)
+		if err != nil {
+			return 0, err
+		}
+		if !handled {
+			return 0, errUnsupported("DOS3Call 不支援 INT 21h AH=%02X", uint8(p.CPU.R16(cpu.AX)>>8))
+		}
+		return uint32(p.CPU.R16(cpu.DX))<<16 | uint32(p.CPU.R16(cpu.AX)), nil
+	}
 
 	// LockSegment（KERNEL.#23）：把一個段釘住，不讓它被移動或丟棄。
 	// wine-gorgon 的段一載入就固定在位址空間裡，兩件事都不會發生，所以這是 no-op；
@@ -254,6 +277,21 @@ func RegisterKernel(p *Process) {
 			}
 		}
 		return driveNone, nil
+	}
+
+	// FatalAppExit（KERNEL.#137）顯示系統 modal 訊息後以 0xFF 結束目前 task。
+	// 無頭執行器不畫系統訊息框，但把文案完整留在 MessageBoxes 供測試與診斷。
+	h["KERNEL.#137"] = func(p *Process, a Args) (uint32, error) {
+		action := a.Word(0)
+		sel, off := a.Ptr(2)
+		p.MessageBoxes = append(p.MessageBoxes, MessageBoxCall{
+			Text: p.CString(sel, off), Style: 0x1000, Steps: p.CPU.Steps,
+		})
+		if action != 0 {
+			p.note("FatalAppExit action=%04X（Wine 9.0 忽略此值）", action)
+		}
+		p.CPU.Halt = true
+		return 0, &ExitError{Code: 0xFF}
 	}
 }
 

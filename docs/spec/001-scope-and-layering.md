@@ -81,3 +81,14 @@ NE 的 `IMPORTORDINAL`／`IMPORTNAME` 重定位就是 far call 的目標。載�
 | M2 | KERNEL：`Global*`、檔案、資源 | 載完五個 `.RSC`，資源位元組與 `tools/re/ne.py` 抽出的相同 |
 | M3 | USER 骨架 ＋ GDI DIB／BitBlt | 主視窗建立、`WM_PAINT` 走完、吐得出一張 DIB |
 | M4 | 主地圖第一幀逐點相同 | 與 `root-main-map.png` 的內容區 0 px 差異 |
+| M5 | PTO2 Win16 匯入面與正常啟動 | KERNEL #1／#102／#137、USER #87／#88／#110、GDI #29／#441 與 KERNEL #178 value import 有實作及測試；pristine 英文原版經既有腳本正常走到主選單，輸出 WinG DIB 與既有 oracle SHA-256 相同 **✓** |
+
+M5 的完成範圍是目前 `TEKE2WIN.EXE` 可見的 Win16 匯入表面，不代表所有
+Win16 程式的完整 API 相容性。2026-09-13 的重播輸入為 SHA-256
+`1828d3e6d9b1e7f9468338b0aed3ef359ee5dc41bc8fbf17aa7e3e01f4a07b1c` 的英文原版，
+透過 `scripts/pto2-intro.txt` 執行 22,828,710 條指令；`KERNEL.DOS3CALL` 實際呼叫
+3 次，終局 640×416 WinG DIB 的 SHA-256
+`00f932b2c6084358b31723aae7534a1c204ddb14de622de945cac3fbd30248cf`
+與 PTO2-remake 的既有主選單 oracle 相同。`FatalExit` 的 Wine 9.0 spec 仍是 stub，
+目前 handler 只保留 AX 低位元組作診斷離開碼；若正常玩家路徑真的進入該 fatal
+分支，必須回到 caller 證據訂正，不能把目前處理冒稱為已證實的參數契約。

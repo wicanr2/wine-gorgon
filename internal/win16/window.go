@@ -94,9 +94,13 @@ type Window struct {
 	ScrollMax [2]int
 
 	// DlgProc 是對話框範本指定的 DLGPROC；由 DefDlgProc 呼叫。
-	DlgProcSel uint16
-	DlgProcOff uint16
-	inDlgProc  bool
+	DlgProcSel      uint16
+	DlgProcOff      uint16
+	inDlgProc       bool
+	Modal           bool
+	DialogEnd       bool
+	DialogCode      int16
+	OwnerWasEnabled bool
 
 	// GoProc 非 nil 時，訊息由 Go 這一側處理（內建控制項用）。
 	GoProc func(w *Window, msg, wParam uint16, lParam uint32) (uint32, error)

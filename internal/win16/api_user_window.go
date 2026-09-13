@@ -211,6 +211,17 @@ func RegisterUserWindow(p *Process) {
 		return p.SendMessage(a.Word(0), a.Word(2), a.Word(4), a.Long(6))
 	}
 
+	h["USER.#110"] = func(p *Process, a Args) (uint32, error) { // PostMessage
+		hwnd := a.Word(0)
+		if hwnd != 0 {
+			if _, ok := p.Window(hwnd); !ok {
+				return 0, nil
+			}
+		}
+		p.PostMessage(hwnd, a.Word(2), a.Word(4), a.Long(6))
+		return 1, nil
+	}
+
 	h["USER.#6"] = func(p *Process, a Args) (uint32, error) { // PostQuitMessage
 		p.Quit, p.QuitCode = true, a.Word(0)
 		return 0, nil

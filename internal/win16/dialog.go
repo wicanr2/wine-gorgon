@@ -158,34 +158,37 @@ func (p *Process) dlgToPixels(t *DialogTemplate, x, y int) (int, int) {
 func RegisterDialog(p *Process) {
 	h := p.Handlers
 
+	// DialogBox(HINSTANCE, LPCSTR template, HWND owner, DLGPROC)
+	//
+	// modal 對話框必須等 EndDialog 才回傳。wine-gorgon 沒有主機事件執行緒，
+	// 因此只消費已排入的決定性訊息；若佇列耗盡仍未 EndDialog，誠實回傳
+	// -1 並留下 note，不能自行替玩家按一個預設按鈕。
+	h["USER.#87"] = func(p *Process, a Args) (uint32, error) {
+		sel, off := a.Ptr(2)
+		procSel, procOff := a.Ptr(8)
+		hwnd, err := p.createDialogResource(sel, off, a.Word(6), procSel, procOff, true)
+		if err != nil || hwnd == 0 {
+			return hwnd, err
+		}
+		return p.runModalDialog(uint16(hwnd))
+	}
+
+	h["USER.#88"] = func(p *Process, a Args) (uint32, error) { // EndDialog
+		return boolTo(p.endDialog(a.Word(0), int16(a.Word(2)))), nil
+	}
+
 	// CreateDialog(HINSTANCE, LPCSTR template, HWND parent, DLGPROC)
 	h["USER.#89"] = func(p *Process, a Args) (uint32, error) {
 		sel, off := a.Ptr(2)
-		id, name := p.resName(sel, off)
-		r, ok := p.Mod.Image.FindResource(ne.RTDialog, "", name, id)
-		if !ok {
-			p.note("CreateDialog 找不到對話框範本 %s/%d", name, id)
-			return 0, nil
-		}
-		data, err := p.Mod.Image.ResourceData(r)
-		if err != nil {
-			return 0, err
-		}
-		blk := p.Mod.Mem.Alloc("對話框範本 "+r.String(), len(data))
-		if blk == nil {
-			return 0, errUnsupported("CreateDialog 配不到範本的 selector")
-		}
-		copy(blk.Data, data)
-		defer p.Mod.Mem.Free(blk.Sel)
 		procSel, procOff := a.Ptr(8)
-		return p.createDialog(blk.Sel, 0, a.Word(6), procSel, procOff, 0)
+		return p.createDialogResource(sel, off, a.Word(6), procSel, procOff, false)
 	}
 
 	// CreateDialogIndirect(HINSTANCE, const void far*, HWND, DLGPROC)
 	h["USER.#219"] = func(p *Process, a Args) (uint32, error) {
 		sel, off := a.Ptr(2)
 		procSel, procOff := a.Ptr(8)
-		return p.createDialog(sel, off, a.Word(6), procSel, procOff, 0)
+		return p.createDialog(sel, off, a.Word(6), procSel, procOff, 0, false)
 	}
 
 	h["USER.#91"] = func(p *Process, a Args) (uint32, error) { // GetDlgItem
@@ -210,8 +213,29 @@ func RegisterDialog(p *Process) {
 
 }
 
+// createDialogResource 載入一份 RT_DIALOG，建立完成後即可釋放暫存範本。
+func (p *Process) createDialogResource(sel, off, parent, procSel, procOff uint16, modal bool) (uint32, error) {
+	id, name := p.resName(sel, off)
+	r, ok := p.Mod.Image.FindResource(ne.RTDialog, "", name, id)
+	if !ok {
+		p.note("CreateDialog 找不到對話框範本 %s/%d", name, id)
+		return 0, nil
+	}
+	data, err := p.Mod.Image.ResourceData(r)
+	if err != nil {
+		return 0, err
+	}
+	blk := p.Mod.Mem.Alloc("對話框範本 "+r.String(), len(data))
+	if blk == nil {
+		return 0, errUnsupported("CreateDialog 配不到範本的 selector")
+	}
+	copy(blk.Data, data)
+	defer p.Mod.Mem.Free(blk.Sel)
+	return p.createDialog(blk.Sel, 0, parent, procSel, procOff, 0, modal)
+}
+
 // createDialog 依範本建對話框與它的控制項。
-func (p *Process) createDialog(sel, off, parent, procSel, procOff uint16, param uint32) (uint32, error) {
+func (p *Process) createDialog(sel, off, parent, procSel, procOff uint16, param uint32, modal bool) (uint32, error) {
 	t, err := p.parseDialogTemplate(sel, off)
 	if err != nil {
 		return 0, err
@@ -235,7 +259,7 @@ func (p *Process) createDialog(sel, off, parent, procSel, procOff uint16, param 
 		Text: t.Caption, Style: t.Style, Parent: parent,
 		ProcSel: procSel, ProcOff: procOff,
 		X: x, Y: y, W: cx + l + r, H: cy + tp + b,
-		Enabled: true, IsDialog: true,
+		Enabled: true, IsDialog: true, Modal: modal,
 		DlgProcSel: procSel, DlgProcOff: procOff,
 		Extra: make([]byte, 30), // DLGWINDOWEXTRA
 	}
@@ -259,6 +283,12 @@ func (p *Process) createDialog(sel, off, parent, procSel, procOff uint16, param 
 	p.Windows[w.Handle] = w
 	p.WindowOrder = append(p.WindowOrder, w.Handle)
 	p.layout(w)
+	if modal {
+		if owner, ok := p.Window(parent); ok && owner.Enabled {
+			owner.Enabled = false
+			w.OwnerWasEnabled = true
+		}
+	}
 
 	for _, it := range t.Items {
 		ix, iy := p.dlgToPixels(t, it.X, it.Y)
@@ -297,6 +327,72 @@ func (p *Process) createDialog(sel, off, parent, procSel, procOff uint16, param 
 		}
 	}
 	return uint32(w.Handle), nil
+}
+
+// endDialog 設定 modal 結果；真正的銷毀與 owner 還原由 DialogBox 的
+// 同步迴圈處理，避免在 DLGPROC 尚未返回時拆掉它正在使用的 Window。
+func (p *Process) endDialog(hwnd uint16, code int16) bool {
+	w, ok := p.Window(hwnd)
+	if !ok || !w.IsDialog || !w.Modal {
+		return false
+	}
+	w.DialogCode = code
+	w.DialogEnd = true
+	if w.Visible {
+		w.Visible = false
+		p.invalidateArea([4]int{w.AbsX, w.AbsY, w.AbsX + w.W, w.AbsY + w.H})
+	}
+	return true
+}
+
+// runModalDialog 消費已由決定性腳本排入的訊息，直到 EndDialog。
+func (p *Process) runModalDialog(hwnd uint16) (uint32, error) {
+	const maxMessages = 100000
+	for i := 0; i < maxMessages; i++ {
+		w, ok := p.Window(hwnd)
+		if !ok {
+			return 0xFFFF, nil
+		}
+		if w.DialogEnd {
+			code := uint16(w.DialogCode)
+			if err := p.closeModalDialog(w); err != nil {
+				return 0, err
+			}
+			return uint32(code), nil
+		}
+		m, ok := p.nextMessage(MsgFilter{}, true)
+		if !ok {
+			p.note("DialogBox %04X 等待外部輸入；目前腳本尚未預先排入訊息", hwnd)
+			if err := p.closeModalDialog(w); err != nil {
+				return 0, err
+			}
+			return 0xFFFF, nil
+		}
+		if m.Message == WMQuit {
+			if err := p.closeModalDialog(w); err != nil {
+				return 0, err
+			}
+			return 0xFFFF, nil
+		}
+		if _, err := p.SendMessage(m.HWnd, m.Message, m.WParam, m.LParam); err != nil {
+			return 0, err
+		}
+	}
+	if w, ok := p.Window(hwnd); ok {
+		if err := p.closeModalDialog(w); err != nil {
+			return 0, err
+		}
+	}
+	return 0, errUnsupported("DialogBox %04X 處理超過 %d 則訊息仍未 EndDialog", hwnd, maxMessages)
+}
+
+func (p *Process) closeModalDialog(w *Window) error {
+	if w.OwnerWasEnabled {
+		if owner, ok := p.Window(w.Parent); ok {
+			owner.Enabled = true
+		}
+	}
+	return p.destroyWindow(w)
 }
 
 // dlgItem 依控制項編號找子視窗。

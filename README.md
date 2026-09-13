@@ -96,7 +96,15 @@ civ1 這個案例還有一個結構上的便宜：它自己帶一套繪圖函式
 | M2 | KERNEL：`Global*`、檔案、資源 | **完成**。全域堆積（含 >64 KiB 的 huge 配置）、檔案系統、NE 資源表 |
 | M3 | USER 訊息迴圈骨架 ＋ GDI BitBlt | **完成**。主選單完整畫出來（含原版點陣字型），可用腳本點選 |
 | M4 | **主地圖第一幀與原版 oracle PNG 逐點相同** | **內容達成**。地圖內容 96×96 逐點相同；三個視窗的幾何與參考幀逐項相同；橫向落點還差 169 px |
+| M5 | PTO2 Win16 匯入面與正常啟動 | **完成目前匯入面**。補齊 KERNEL／USER／GDI 的 8 支 ordinal handler 與 `__WINFLAGS`，英文原版由開場正常走到主選單，WinG DIB 與既有 oracle PNG 的 SHA-256 相同 |
 | — | **拿它去驗重製版** | civ1 的 Go 重製版：地圖客戶區 314,944 個像素**逐點相同** |
+
+M5 的 2026-09-13 收據使用 pristine `TEKE2WIN.EXE`（SHA-256
+`1828d3e6d9b1e7f9468338b0aed3ef359ee5dc41bc8fbf17aa7e3e01f4a07b1c`）與
+`scripts/pto2-intro.txt`。執行 22,828,710 條指令、攔截 695,499 次 API 呼叫，
+其中 `KERNEL.DOS3CALL` 實際走過 3 次；輸出的 640×416 WinG DIB SHA-256 為
+`00f932b2c6084358b31723aae7534a1c204ddb14de622de945cac3fbd30248cf`，與
+PTO2-remake 既有 `docs/shots/original/wg_main_menu.png` 完全相同。
 
 載入 civ1 專案的 `NEWUNIT.SAV`，把主地圖畫出來，和同一份原版參考幀
 （DOSBox 裡的 Windows 3.1、800×600、1:1）逐點比對：

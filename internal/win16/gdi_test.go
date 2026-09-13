@@ -88,6 +88,59 @@ func TestBitBltClipKeepsSourceAligned(t *testing.T) {
 	}
 }
 
+func TestPatBltUsesSelectedPatternAndROP(t *testing.T) {
+	surf := NewSurface(4, 2)
+	dc := &DC{Surf: surf, ClipR: 4, ClipB: 2}
+	pat := NewSurface(2, 1)
+	pat.Set(0, 0, 0x12)
+	pat.Set(1, 0, 0x34)
+	brush := &Brush{Patt: 1}
+	PatBlt(dc, 0, 0, 4, 2, 0x00F00021, brush, pat) // PATCOPY
+	for y := 0; y < 2; y++ {
+		for x, want := range []byte{0x12, 0x34, 0x12, 0x34} {
+			if got := surf.At(x, y); got != want {
+				t.Fatalf("(%d,%d)=%02X，預期 %02X", x, y, got, want)
+			}
+		}
+	}
+	PatBlt(dc, 0, 0, 4, 2, 0x00550009, &Brush{Index: 0}, nil) // DSTINVERT
+	if surf.At(0, 0) != 0xED || surf.At(1, 0) != 0xCB {
+		t.Fatalf("DSTINVERT 後首列 = %02X %02X，預期 ED CB", surf.At(0, 0), surf.At(1, 0))
+	}
+}
+
+func TestGetDIBitsWritesBottomUp8BPP(t *testing.T) {
+	p := newTestProcess()
+	p.Mod = &Module{Mem: NewMemory()}
+	p.initPalette()
+	p.SysPalette[1] = RGB{R: 10, G: 20, B: 30}
+	surf := NewSurface(3, 2)
+	copy(surf.Bits[0:3], []byte{1, 2, 3})
+	copy(surf.Bits[surf.Stride:surf.Stride+3], []byte{4, 5, 6})
+	hbitmap := p.Objects.Add(&Object{Kind: ObjBitmap, Bitmap: &Bitmap{Surf: surf, Planes: 1, BPP: 8}})
+	info := p.Mod.Mem.Alloc("BITMAPINFO", 40+256*4)
+	bits := p.Mod.Mem.Alloc("DIB bits", 8)
+	if info == nil || bits == nil {
+		t.Fatal("配置測試記憶體失敗")
+	}
+	_ = p.Mod.Mem.WriteU16(info.Sel, 0, 40)
+	_ = p.Mod.Mem.WriteU16(info.Sel, 14, 8)
+	got, err := p.getDIBits(hbitmap, 0, 2, bits.Sel, 0, info.Sel, 0, 0)
+	if err != nil || got != 2 {
+		t.Fatalf("GetDIBits = %d, %v，預期 2, nil", got, err)
+	}
+	want := []byte{4, 5, 6, 0, 1, 2, 3, 0}
+	if string(bits.Data) != string(want) {
+		t.Fatalf("DIB bits = %v，預期 %v（bottom-up 且 4-byte stride）", bits.Data, want)
+	}
+	if info.Data[40] != 0 || info.Data[41] != 0 || info.Data[42] != 0 {
+		t.Fatalf("palette[0] BGR = %v，預期 0,0,0", info.Data[40:43])
+	}
+	if info.Data[44] != 30 || info.Data[45] != 20 || info.Data[46] != 10 {
+		t.Fatalf("palette[1] BGR = %v，預期 30,20,10", info.Data[44:47])
+	}
+}
+
 func TestRealizePaletteStartsAtTen(t *testing.T) {
 	p := &Process{}
 	p.initPalette()

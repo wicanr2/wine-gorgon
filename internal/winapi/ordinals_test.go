@@ -224,3 +224,9 @@ func TestTableCoversKnownSurfaces(t *testing.T) {
 		}
 	}
 }
+
+func TestPTO2WinFlagsValueImport(t *testing.T) {
+	if got, ok := ValueImports["KERNEL.#178"]; !ok || got != 0x0413 {
+		t.Fatalf("KERNEL.__WINFLAGS = %04X, %v，預期 0413, true", got, ok)
+	}
+}

@@ -1,6 +1,10 @@
 package win16
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/wicanr2/wine-gorgon/internal/cpu"
+)
 
 func newTestProcess() *Process {
 	p := &Process{
@@ -129,6 +133,59 @@ func TestNoDuplicateHandlerRegistrations(t *testing.T) {
 		for k, names := range dup {
 			t.Errorf("%s 被 %v 各登記一次", k, names)
 		}
+	}
+}
+
+func TestPTO2HandlersRegistered(t *testing.T) {
+	p := &Process{Handlers: map[string]Handler{}, RawHandlers: map[string]RawHandler{}}
+	RegisterAll(p)
+	for _, key := range []string{
+		"KERNEL.#1", "KERNEL.#102", "KERNEL.#137",
+		"USER.#87", "USER.#88", "USER.#110",
+		"GDI.#29", "GDI.#441",
+	} {
+		if _, ok := p.Handlers[key]; !ok {
+			t.Errorf("%s 沒有 handler", key)
+		}
+	}
+}
+
+func TestDOS3CallUsesCurrentRegisters(t *testing.T) {
+	p := &Process{Mod: &Module{Mem: NewMemory()}, Handlers: map[string]Handler{}, RawHandlers: map[string]RawHandler{}}
+	p.CPU = cpu.New(NewCPUBus(p.Mod.Mem))
+	p.CPU.SetR16(cpu.AX, 0x3000) // INT 21h AH=30h：取 DOS 版本
+	RegisterKernel(p)
+	got, err := p.Handlers["KERNEL.#102"](p, Args{})
+	if err != nil {
+		t.Fatalf("DOS3Call: %v", err)
+	}
+	if uint16(got) != 0x1606 {
+		t.Fatalf("DOS3Call DX:AX=%08X，AX 預期 1606", got)
+	}
+}
+
+func TestEndDialogReturnsCodeAndRestoresOwner(t *testing.T) {
+	p := newTestProcess()
+	owner := &Window{Handle: 0x0800, Enabled: false, GoProc: func(*Window, uint16, uint16, uint32) (uint32, error) { return 0, nil }}
+	dlg := &Window{Handle: 0x0801, Parent: owner.Handle, IsDialog: true, Modal: true,
+		OwnerWasEnabled: true, Visible: true,
+		GoProc: func(*Window, uint16, uint16, uint32) (uint32, error) { return 0, nil }}
+	p.Windows[owner.Handle] = owner
+	p.Windows[dlg.Handle] = dlg
+	p.WindowOrder = []uint16{owner.Handle, dlg.Handle}
+	if !p.endDialog(dlg.Handle, -7) {
+		t.Fatal("EndDialog 拒絕有效的 modal dialog")
+	}
+	got, err := p.runModalDialog(dlg.Handle)
+	wantCode := int16(-7)
+	if err != nil || uint16(got) != uint16(wantCode) {
+		t.Fatalf("DialogBox 結果=%04X, %v，預期 FFF9", uint16(got), err)
+	}
+	if !owner.Enabled {
+		t.Error("modal dialog 結束後 owner 沒有重新啟用")
+	}
+	if _, ok := p.Window(dlg.Handle); ok {
+		t.Error("modal dialog 結束後仍留在視窗表")
 	}
 }
 

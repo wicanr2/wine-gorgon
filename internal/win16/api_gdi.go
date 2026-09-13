@@ -149,6 +149,29 @@ func RegisterGDI(p *Process) {
 		return p.poly(a, true)
 	}
 
+	// PatBlt(HDC, x, y, w, h, DWORD rop)
+	h["GDI.#29"] = func(p *Process, a Args) (uint32, error) {
+		dst, ok := p.dc(a.Word(0))
+		if !ok {
+			return 0, nil
+		}
+		brushObj, ok := p.Objects.Get(dst.Brush, ObjBrush)
+		if !ok {
+			return 0, nil
+		}
+		var pattern *Surface
+		if brushObj.Brush.Patt != 0 {
+			if obj, ok := p.Objects.Get(brushObj.Brush.Patt, ObjBitmap); ok && obj.Bitmap != nil {
+				pattern = obj.Bitmap.Surf
+			}
+		}
+		PatBlt(dst,
+			int(int16(a.Word(2))), int(int16(a.Word(4))),
+			int(int16(a.Word(6))), int(int16(a.Word(8))),
+			a.Long(10), brushObj.Brush, pattern)
+		return 1, nil
+	}
+
 	// BitBlt(HDC dst, x, y, w, h, HDC src, sx, sy, DWORD rop)
 	h["GDI.#34"] = func(p *Process, a Args) (uint32, error) {
 		dst, ok := p.dc(a.Word(0))
@@ -376,6 +399,16 @@ func RegisterGDI(p *Process) {
 			n++
 		}
 		return uint32(n), nil
+	}
+
+	// GetDIBits(HDC, HBITMAP, start, lines, bits, BITMAPINFO, usage)
+	// 目前支援 PTO2／WinG 使用的 8bpp BI_RGB。bits 為 nil 時仍填入 header
+	// 與色表，讓呼叫端先查詢輸出形狀。
+	h["GDI.#441"] = func(p *Process, a Args) (uint32, error) {
+		bitsSel, bitsOff := a.Ptr(8)
+		infoSel, infoOff := a.Ptr(12)
+		return p.getDIBits(a.Word(2), int(a.Word(4)), int(a.Word(6)),
+			bitsSel, bitsOff, infoSel, infoOff, a.Word(16))
 	}
 
 	// SetMapMode(HDC, int)：只記下來。wine-gorgon 一律用 MM_TEXT 的
@@ -960,6 +993,143 @@ func (p *Process) storeBitmapBits(bm *Bitmap, sel, off uint16, n int) int {
 		}
 	}
 	return n
+}
+
+// getDIBits 是 GDI.#441 的可測核心。BITMAPINFOHEADER 採 Win3.x 的 40-byte
+// 形狀；輸出 scan line 依 DIB 契約補齊到 4 bytes。
+func (p *Process) getDIBits(hbitmap uint16, start, lines int,
+	bitsSel, bitsOff, infoSel, infoOff, colorUse uint16) (uint32, error) {
+	obj, ok := p.Objects.Get(hbitmap, ObjBitmap)
+	if !ok || obj.Bitmap == nil || obj.Bitmap.Surf == nil || infoSel == 0 {
+		return 0, nil
+	}
+	bm := obj.Bitmap
+	mem := p.Mod.Mem
+	read32 := func(off uint16) (uint32, error) {
+		lo, err := mem.ReadU16(infoSel, infoOff+off)
+		if err != nil {
+			return 0, err
+		}
+		hi, err := mem.ReadU16(infoSel, infoOff+off+2)
+		return uint32(hi)<<16 | uint32(lo), err
+	}
+	write32 := func(off uint16, v uint32) error {
+		if err := mem.WriteU16(infoSel, infoOff+off, uint16(v)); err != nil {
+			return err
+		}
+		return mem.WriteU16(infoSel, infoOff+off+2, uint16(v>>16))
+	}
+	headerSize, err := read32(0)
+	if err != nil {
+		return 0, err
+	}
+	if headerSize == 0 {
+		headerSize = 40
+	}
+	if headerSize < 40 {
+		return 0, errUnsupported("GetDIBits BITMAPINFOHEADER 長度 %d，小於 40", headerSize)
+	}
+	w, hgt := bm.Surf.W, bm.Surf.H
+	rawHeight, err := read32(8)
+	if err != nil {
+		return 0, err
+	}
+	topDown := int32(rawHeight) < 0
+	bpp, err := mem.ReadU16(infoSel, infoOff+14)
+	if err != nil {
+		return 0, err
+	}
+	if bpp == 0 {
+		bpp = uint16(bm.BPP)
+		if bpp == 0 {
+			bpp = 8
+		}
+	}
+	if bpp != 8 {
+		p.note("GetDIBits %dx%d bpp=%d：只支援 8bpp BI_RGB", w, hgt, bpp)
+		return 0, nil
+	}
+	stride := (w + 3) &^ 3
+	if err := write32(0, headerSize); err != nil {
+		return 0, err
+	}
+	if err := write32(4, uint32(int32(w))); err != nil {
+		return 0, err
+	}
+	heightOut := int32(hgt)
+	if topDown {
+		heightOut = -heightOut
+	}
+	if err := write32(8, uint32(heightOut)); err != nil {
+		return 0, err
+	}
+	if err := mem.WriteU16(infoSel, infoOff+12, 1); err != nil {
+		return 0, err
+	}
+	if err := mem.WriteU16(infoSel, infoOff+14, bpp); err != nil {
+		return 0, err
+	}
+	if err := write32(16, 0); err != nil { // BI_RGB
+		return 0, err
+	}
+	if err := write32(20, uint32(stride*hgt)); err != nil {
+		return 0, err
+	}
+	if err := write32(32, 256); err != nil { // biClrUsed
+		return 0, err
+	}
+
+	// DIB_RGB_COLORS：BITMAPINFOHEADER 後接 RGBQUAD；DIB_PAL_COLORS 的
+	// 16-bit palette index 目前不是 PTO2 使用面，撞到時明確回報。
+	if colorUse == 0 {
+		base := infoOff + uint16(headerSize)
+		for i, e := range p.SysPalette {
+			at := base + uint16(i*4)
+			if err := mem.WriteU8(infoSel, at, e.B); err != nil {
+				return 0, err
+			}
+			if err := mem.WriteU8(infoSel, at+1, e.G); err != nil {
+				return 0, err
+			}
+			if err := mem.WriteU8(infoSel, at+2, e.R); err != nil {
+				return 0, err
+			}
+			if err := mem.WriteU8(infoSel, at+3, 0); err != nil {
+				return 0, err
+			}
+		}
+	} else {
+		p.note("GetDIBits DIB_PAL_COLORS 尚未實作")
+		return 0, nil
+	}
+
+	if bitsSel == 0 {
+		return uint32(hgt), nil
+	}
+	if start < 0 || start >= hgt || lines <= 0 {
+		return 0, nil
+	}
+	if lines > hgt-start {
+		lines = hgt - start
+	}
+	out := make([]byte, stride*lines)
+	for i := 0; i < lines; i++ {
+		y := start + i
+		if !topDown {
+			y = hgt - 1 - y
+		}
+		copy(out[i*stride:i*stride+w], bm.Surf.Bits[y*bm.Surf.Stride:y*bm.Surf.Stride+w])
+	}
+	written := 0
+	mem.Walk(bitsSel, bitsOff, len(out), func(part []byte) bool {
+		copy(part, out[written:])
+		written += len(part)
+		return true
+	})
+	if written != len(out) {
+		return 0, errUnsupported("GetDIBits 只寫入 %d/%d bytes", written, len(out))
+	}
+	return uint32(lines), nil
 }
 
 func abs(x int) int {

@@ -136,8 +136,11 @@ func BitBlt(dst *DC, dx, dy, w, h int, src *DC, sx, sy int, rop uint32, pattern 
 	}
 	shiftX := dl - (dx + dst.OrgX)
 	shiftY := dt - (dy + dst.OrgY)
-	srcX := sx + src.OrgX + shiftX
-	srcY := sy + src.OrgY + shiftY
+	srcX, srcY := sx+shiftX, sy+shiftY
+	if src != nil {
+		srcX += src.OrgX
+		srcY += src.OrgY
+	}
 
 	sameSurface := src != nil && src.Surf == dst.Surf
 	stepY, y0 := 1, 0
@@ -161,6 +164,27 @@ func BitBlt(dst *DC, dx, dy, w, h int, src *DC, sx, sy int, rop uint32, pattern 
 			}
 			d := dst.Surf.At(dl+i, dt+j)
 			dst.Surf.Set(dl+i, dt+j, rop3(table, pattern, s, d))
+		}
+	}
+}
+
+// PatBlt 以目前筆刷填入目的矩形並套用 ROP。圖樣座標和 FillPattern 一樣
+// 對齊整張 Surface 的 (0,0)，不是以矩形左上角重新起算。
+func PatBlt(dst *DC, x, y, w, h int, rop uint32, brush *Brush, pattern *Surface) {
+	if w <= 0 || h <= 0 || brush == nil || brush.Hollow {
+		return
+	}
+	l, t, cw, ch := dst.clipTo(x, y, w, h)
+	table := uint8(rop >> 16)
+	for yy := 0; yy < ch; yy++ {
+		for xx := 0; xx < cw; xx++ {
+			px, py := l+xx, t+yy
+			pv := brush.Index
+			if pattern != nil && pattern.W > 0 && pattern.H > 0 {
+				pv = pattern.At(px%pattern.W, py%pattern.H)
+			}
+			dv := dst.Surf.At(px, py)
+			dst.Surf.Set(px, py, rop3(table, pv, 0, dv))
 		}
 	}
 }
