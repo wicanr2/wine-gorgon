@@ -80,4 +80,4 @@ NE 的 `IMPORTORDINAL`／`IMPORTNAME` 重定位就是 far call 的目標。載�
 | M1 | CPU ＋ selector ＋ thunk | 跑到 `WinMain` 進入點不崩，攔得到第一個 API 呼叫 |
 | M2 | KERNEL：`Global*`、檔案、資源 | 載完五個 `.RSC`，資源位元組與 `tools/re/ne.py` 抽出的相同 |
 | M3 | USER 骨架 ＋ GDI DIB／BitBlt | 主視窗建立、`WM_PAINT` 走完、吐得出一張 DIB |
-| M4 | 主地圖第一幀逐點相同 | 與 `root-main-map.png` 的內容區 0 px 差異 |
+| M4 | 主地圖第一幀逐點相同 | 與 `root-main-map.png` 的內容區 0 px 差異 **✓**（96×96 內容區 0 px；整塊客戶區 608×538 只差參考幀上的滑鼠游標 54 px，不需位移，見 spec 006 §3／§4）|
