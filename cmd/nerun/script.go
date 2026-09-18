@@ -58,6 +58,12 @@ func runScriptLine(p *win16.Process, text string, echo func(string)) error {
 		return nil
 	}
 	cmd, args := fields[0], fields[1:]
+	// 位址的 `seg<段號>:off` 寫法在總入口就換成 selector（probe_watch.go）：
+	// 每支命令各自處理會漏掉一支，而漏掉的那支不報錯，只會看錯地方。
+	args = normalizeSegmentAddresses(args)
+	if handled, err := probeKeepGoing(p, cmd, args, echo); handled {
+		return err
+	}
 	if handled, err := probeCommand(p, cmd, args, echo); handled {
 		return err
 	}
