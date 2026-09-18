@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wicanr2/wine-gorgon/internal/cpu"
+	"github.com/wicanr2/wine-gorgon/internal/win16"
 )
 
 func TestProbeRegisterInjectionIsAtomic(t *testing.T) {
@@ -217,4 +218,35 @@ func TestScriptContinuesAfterExhaustedWatch(t *testing.T) {
 	if !strings.Contains(string(raw), `"address":"0017:0000"`) {
 		t.Fatalf("seg 寫法沒有換成 selector：%s", raw)
 	}
+}
+
+// TestSampleProbeCarriesStack 鎖住 stack_hex：停在函式入口時，`SS:SP` 起的 8 bytes
+// 就是 far 返回位址與第一個參數——「這一次是誰呼叫的」固定位址的 memory 取樣答不出來，
+// 因為 SP 會移動。讀不到（堆疊段未配置）要留空，不能讓整筆取樣失敗。
+func TestSampleProbeCarriesStack(t *testing.T) {
+	p := probeProcess([]byte{0x90, 0xF4})
+	p.CPU.Seg[cpu.SS] = 23
+	p.CPU.R[cpu.SP] = 0
+	copy(mustBlock(t, p, 23), []byte{0x34, 0x12, 0xCD, 0xAB, 0x07, 0x00, 0x00, 0x00})
+	st, err := sampleProbe(p, probeAddress{23, 0}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.StackHex != "3412cdab07000000" {
+		t.Fatalf("stack_hex 要是 SS:SP 起的 8 bytes，得 %q", st.StackHex)
+	}
+	p.CPU.Seg[cpu.SS] = 99 // 未配置的段
+	st, err = sampleProbe(p, probeAddress{23, 0}, 2)
+	if err != nil || st.StackHex != "" {
+		t.Fatalf("堆疊讀不到要留空而不是整筆失敗：%q %v", st.StackHex, err)
+	}
+}
+
+func mustBlock(t *testing.T, p *win16.Process, sel uint16) []byte {
+	t.Helper()
+	b, ok := p.Mod.Mem.Block(sel)
+	if !ok {
+		t.Fatalf("段 %04X 未配置", sel)
+	}
+	return b.Data
 }

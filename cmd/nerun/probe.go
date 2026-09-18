@@ -50,6 +50,11 @@ type probeState struct {
 	Flags         uint16    `json:"flags"`
 	MemoryAddress string    `json:"memory_address"`
 	MemoryHex     string    `json:"memory_hex"`
+	// StackHex 是取樣當下 SS:SP 起的 8 bytes。停在某個函式入口時，
+	// 那就是 far 返回位址（IP、CS）與第一個參數——「每一次是誰呼叫的、
+	// 帶什麼參數」固定位址的 memory 取樣回答不了，因為 SP 會移動。
+	// 讀不到（堆疊段未配置）就留空，不讓整筆取樣失敗。
+	StackHex string `json:"stack_hex,omitempty"`
 }
 
 func sampleProbe(p *win16.Process, a probeAddress, n uint64) (probeState, error) {
@@ -58,7 +63,11 @@ func sampleProbe(p *win16.Process, a probeAddress, n uint64) (probeState, error)
 		return probeState{}, e
 	}
 	c := p.CPU
-	return probeState{c.Steps, fmt.Sprintf("%04X:%04X", c.Seg[cpu.CS], c.IP), c.R, c.Seg, c.Flags, a.String(), hex.EncodeToString(b)}, nil
+	st := probeState{c.Steps, fmt.Sprintf("%04X:%04X", c.Seg[cpu.CS], c.IP), c.R, c.Seg, c.Flags, a.String(), hex.EncodeToString(b), ""}
+	if sb, e := probeBytes(p, probeAddress{c.Seg[cpu.SS], c.R16(cpu.SP)}, 8); e == nil {
+		st.StackHex = hex.EncodeToString(sb)
+	}
+	return st, nil
 }
 
 // runUntil 在目標指令執行之前停止；步數用盡、CPU 結束與錯誤都不能算命中。
